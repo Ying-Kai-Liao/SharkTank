@@ -1,0 +1,43 @@
+{
+  "groups": [
+    {
+      "id": "group-1",
+      "dialogues": [
+        {
+          "speakerId": "cat",
+          "text": "Thank you for the pitch. Before we go deeper, what is the single biggest pain point your product solves first?"
+        },
+        {
+          "speakerId": "dog",
+          "text": "Give us one concrete customer example so we understand who feels this problem the most."
+        },
+        {
+          "speakerId": "shark",
+          "text": "And why now? Tell us what changed in the market that makes this the right timing."
+        }
+      ]
+    },
+    {
+      "id": "group-2",
+      "dialogues": [
+        {
+          "speakerId": "cat",
+          "text": "Good. Now talk us through revenue. How exactly do you make money in the first 12 months?"
+        }
+      ]
+    },
+    {
+      "id": "group-3",
+      "dialogues": [
+        {
+          "speakerId": "dog",
+          "text": "How do you defend this from copycats once bigger players notice traction?"
+        },
+        {
+          "speakerId": "shark",
+          "text": "Last one from me: what milestone will prove this is venture-scale within six months?"
+        }
+      ]
+    }
+  ]
+}

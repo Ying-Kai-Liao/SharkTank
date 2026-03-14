@@ -1,0 +1,44 @@
+{
+  "scorePools": {
+    "accept": {
+      "good": [86, 90, 94],
+      "medium": [58, 63, 69]
+    },
+    "disaccept": {
+      "good": [81, 88, 92],
+      "medium": [52, 60, 66],
+      "bad": [18, 27, 39]
+    }
+  },
+  "catchphrases": {
+    "accept": {
+      "good": [
+        "Power move. You accepted a strong deal and locked in real momentum.",
+        "Great call. This acceptance keeps your growth lane wide open.",
+        "Sharp decision. You converted judge confidence into immediate leverage."
+      ],
+      "medium": [
+        "Solid choice. The deal is workable and gives you a practical runway.",
+        "Balanced move. You accepted enough support to keep the venture alive.",
+        "Reasonable take. This acceptance buys time to prove the next milestone."
+      ]
+    },
+    "disaccept": {
+      "good": [
+        "Bold confidence. You disaccepted now because your upside looks larger alone.",
+        "Calculated risk. You turned down offers and kept full strategic control.",
+        "Strong conviction. You disaccepted and still preserved a high score."
+      ],
+      "medium": [
+        "Mixed outcome. You disaccepted and now need stronger execution to justify it.",
+        "Playable result. Declining offers kept control, but pressure goes up.",
+        "Fair score. You disaccepted, so the next proof point becomes critical."
+      ],
+      "bad": [
+        "Bad score. No judge accepted the offer path this round, and your disaccept locked that outcome.",
+        "Tough ending. No judge accepted, and disaccept leaves you with no deal support.",
+        "Low result. No judge accepted the offer terms, and disaccept closes the round empty-handed."
+      ]
+    }
+  }
+}
