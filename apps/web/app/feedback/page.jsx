@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 const JUDGE_NAMES = {
@@ -14,7 +14,7 @@ function formatDecision(decisionType) {
   return decisionType === "accept" ? "Accepted Offer" : "Disaccepted Offers";
 }
 
-export default function FeedbackPage() {
+function FeedbackPageContent() {
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState(null);
@@ -136,5 +136,25 @@ export default function FeedbackPage() {
         </div>
       </section>
     </main>
+  );
+}
+
+export default function FeedbackPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="relative min-h-screen overflow-hidden bg-black text-white">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_15%,rgba(255,255,255,0.18),transparent_36%),radial-gradient(circle_at_78%_18%,rgba(255,255,255,0.12),transparent_32%),linear-gradient(180deg,#02050d_0%,#060b17_45%,#020407_100%)]" />
+          <section className="relative z-10 mx-auto flex min-h-screen w-full max-w-4xl items-center justify-center p-5 md:p-8">
+            <div className="w-full rounded-3xl border border-white/20 bg-black/70 p-6 shadow-[0_30px_80px_rgba(0,0,0,0.6)] backdrop-blur md:p-8">
+              <h1 className="font-display text-3xl leading-tight text-white md:text-5xl">Round Feedback</h1>
+              <p className="mt-6 text-sm text-white/80 md:text-base">Loading feedback from API...</p>
+            </div>
+          </section>
+        </main>
+      }
+    >
+      <FeedbackPageContent />
+    </Suspense>
   );
 }

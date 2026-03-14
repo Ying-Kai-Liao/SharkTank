@@ -1,11 +1,19 @@
 import {
+  createFinalizedPitch,
+  createPitchTimerState,
   PLAYER_ACTIONS,
+  PITCH_CLOSE_REASONS,
+  PITCH_SOURCE_TYPES,
   ROUND_STATES,
-  validateJudgeBundle
+  validateJudgeBundle,
+  validatePitchStart,
+  validatePitchTranscriptUpdate
 } from "../../contracts/src/index.js";
 import { JUDGE_PROFILES } from "./judges.js";
 import { createRoundResult, generateOffers } from "./offers.js";
 import { evaluateAnswer, evaluatePitch, mergeEvaluations } from "./scoring.js";
+
+export const DEFAULT_PITCH_DURATION_SECONDS = 45;
 
 export class InvalidActionError extends Error {
   constructor(message) {
@@ -14,11 +22,34 @@ export class InvalidActionError extends Error {
   }
 }
 
+function createPitchCaptureState(durationSeconds = DEFAULT_PITCH_DURATION_SECONDS) {
+  return {
+    durationSeconds,
+    sourceType: null,
+    startedAtMs: null,
+    closedAtMs: null,
+    closeReason: null,
+    transcriptUpdates: [],
+    finalizedPitch: null
+  };
+}
+
+function clonePitchCapture(pitchCapture, updates = {}) {
+  return {
+    ...pitchCapture,
+    ...updates,
+    transcriptUpdates: updates.transcriptUpdates ?? [...pitchCapture.transcriptUpdates]
+  };
+}
+
 function cloneState(state, updates) {
   return {
     ...state,
     ...updates,
-    transcript: updates.transcript ?? [...state.transcript]
+    transcript: updates.transcript ?? [...state.transcript],
+    judgeResponses: updates.judgeResponses ?? [...state.judgeResponses],
+    offers: updates.offers ?? [...state.offers],
+    pitchCapture: updates.pitchCapture ?? clonePitchCapture(state.pitchCapture)
   };
 }
 
@@ -38,7 +69,16 @@ function assertAction(currentState, expectedState, actionType) {
   }
 }
 
-export function createInitialGameState() {
+function readActionTime(action, key) {
+  const value = action?.payload?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : Date.now();
+}
+
+export function createInitialGameState(options = {}) {
+  const pitchDurationSeconds = Number.isInteger(options.pitchDurationSeconds) && options.pitchDurationSeconds > 0
+    ? options.pitchDurationSeconds
+    : DEFAULT_PITCH_DURATION_SECONDS;
+
   return {
     currentState: ROUND_STATES.LOBBY,
     pitch: "",
@@ -49,15 +89,37 @@ export function createInitialGameState() {
     offers: [],
     acceptedDealId: null,
     roundResult: null,
-    transcript: []
+    transcript: [],
+    pitchCapture: createPitchCaptureState(pitchDurationSeconds)
   };
 }
 
-export function getAllowedActions(state) {
+export function getPitchTimerSnapshot(state, nowMs = Date.now()) {
+  if (!state?.pitchCapture || !Number.isFinite(state.pitchCapture.startedAtMs)) {
+    return null;
+  }
+
+  return createPitchTimerState({
+    durationSeconds: state.pitchCapture.durationSeconds,
+    startedAtMs: state.pitchCapture.startedAtMs,
+    closedAtMs: state.pitchCapture.closedAtMs,
+    nowMs
+  });
+}
+
+export function getAllowedActions(state, options = {}) {
+  const pitchTimer = getPitchTimerSnapshot(state, options.nowMs ?? Date.now());
+
   switch (state.currentState) {
     case ROUND_STATES.LOBBY:
-      return [PLAYER_ACTIONS.SUBMIT_PITCH];
-    case ROUND_STATES.PITCH_SUBMITTED:
+      return [PLAYER_ACTIONS.START_PITCH];
+    case ROUND_STATES.PITCH:
+      if (pitchTimer?.isExpired) {
+        return [PLAYER_ACTIONS.CLOSE_PITCH];
+      }
+
+      return [PLAYER_ACTIONS.SUBMIT_PITCH_TRANSCRIPT, PLAYER_ACTIONS.CLOSE_PITCH];
+    case ROUND_STATES.PITCH_CLOSED:
     case ROUND_STATES.JUDGE_REACTIONS:
     case ROUND_STATES.DEALS:
       return [PLAYER_ACTIONS.ADVANCE];
@@ -120,22 +182,114 @@ function resolveDealRejection(state) {
   });
 }
 
+function finalizePitch(state, action) {
+  assertAction(state.currentState, ROUND_STATES.PITCH, action.type);
+
+  const nowMs = readActionTime(action, "nowMs");
+  const pitchTimer = getPitchTimerSnapshot(state, nowMs);
+
+  if (!pitchTimer) {
+    throw new InvalidActionError("Pitch timing is unavailable for this round.");
+  }
+
+  const requestedReason = action.payload?.reason;
+  const closeReason = pitchTimer.isExpired ? PITCH_CLOSE_REASONS.TIMER_EXPIRED : requestedReason;
+
+  if (!Object.values(PITCH_CLOSE_REASONS).includes(closeReason)) {
+    throw new InvalidActionError("Pitch close reason must be manual or timer_expired.");
+  }
+
+  const closedAtMs = closeReason === PITCH_CLOSE_REASONS.TIMER_EXPIRED ? pitchTimer.closesAtMs : nowMs;
+  const finalizedPitch = createFinalizedPitch({
+    updates: state.pitchCapture.transcriptUpdates,
+    durationSeconds: state.pitchCapture.durationSeconds,
+    startedAtMs: state.pitchCapture.startedAtMs,
+    closedAtMs,
+    closeReason
+  });
+  const evaluation = evaluatePitch(finalizedPitch.text);
+
+  return cloneState(state, {
+    currentState: ROUND_STATES.PITCH_CLOSED,
+    pitch: finalizedPitch.text,
+    evaluation,
+    transcript: appendTranscript(state, "Founder", finalizedPitch.text),
+    pitchCapture: clonePitchCapture(state.pitchCapture, {
+      closedAtMs,
+      closeReason,
+      finalizedPitch
+    })
+  });
+}
+
 export function applyAction(state, action) {
   switch (action.type) {
-    case PLAYER_ACTIONS.SUBMIT_PITCH: {
+    case PLAYER_ACTIONS.START_PITCH: {
       assertAction(state.currentState, ROUND_STATES.LOBBY, action.type);
-      const pitch = action.payload?.pitch?.trim();
-      const evaluation = evaluatePitch(pitch);
+      const startPayload = {
+        durationSeconds:
+          Number.isInteger(action.payload?.durationSeconds) && action.payload.durationSeconds > 0
+            ? action.payload.durationSeconds
+            : state.pitchCapture.durationSeconds,
+        startedAtMs: readActionTime(action, "startedAtMs"),
+        sourceType: action.payload?.sourceType ?? PITCH_SOURCE_TYPES.MOCK
+      };
+
+      validatePitchStart(startPayload);
 
       return cloneState(state, {
-        currentState: ROUND_STATES.PITCH_SUBMITTED,
-        pitch,
-        evaluation,
-        transcript: appendTranscript(state, "Founder", pitch)
+        currentState: ROUND_STATES.PITCH,
+        pitch: "",
+        answer: "",
+        evaluation: null,
+        judgeResponses: [],
+        leadQuestion: "",
+        offers: [],
+        acceptedDealId: null,
+        roundResult: null,
+        transcript: [],
+        pitchCapture: {
+          durationSeconds: startPayload.durationSeconds,
+          sourceType: startPayload.sourceType,
+          startedAtMs: startPayload.startedAtMs,
+          closedAtMs: null,
+          closeReason: null,
+          transcriptUpdates: [],
+          finalizedPitch: null
+        }
       });
     }
+    case PLAYER_ACTIONS.SUBMIT_PITCH_TRANSCRIPT: {
+      assertAction(state.currentState, ROUND_STATES.PITCH, action.type);
+      const update = {
+        eventId: action.payload?.eventId,
+        sequence: action.payload?.sequence,
+        text: action.payload?.text,
+        receivedAtMs: readActionTime(action, "receivedAtMs"),
+        sourceType: action.payload?.sourceType ?? state.pitchCapture.sourceType ?? PITCH_SOURCE_TYPES.MOCK
+      };
+
+      validatePitchTranscriptUpdate(update);
+
+      if (state.pitchCapture.closedAtMs !== null) {
+        throw new InvalidActionError("Pitch capture is already closed.");
+      }
+
+      const pitchTimer = getPitchTimerSnapshot(state, update.receivedAtMs);
+      if (!pitchTimer || pitchTimer.isExpired) {
+        throw new InvalidActionError("Cannot accept transcript updates after the pitch timer has expired.");
+      }
+
+      return cloneState(state, {
+        pitchCapture: clonePitchCapture(state.pitchCapture, {
+          transcriptUpdates: [...state.pitchCapture.transcriptUpdates, update]
+        })
+      });
+    }
+    case PLAYER_ACTIONS.CLOSE_PITCH:
+      return finalizePitch(state, action);
     case PLAYER_ACTIONS.ADVANCE: {
-      if (state.currentState === ROUND_STATES.PITCH_SUBMITTED) {
+      if (state.currentState === ROUND_STATES.PITCH_CLOSED) {
         validateJudgeBundle(action.payload);
         const judgeResponses = action.payload.judgeResponses;
 
