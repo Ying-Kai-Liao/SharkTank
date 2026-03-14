@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: "Bungee", sans-serif;
+  --font-body: "Plus Jakarta Sans", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-body);
+}
+
+.pixel-crisp {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.stage-backdrop {
+  background-image: linear-gradient(180deg, rgba(0, 0, 0, 0.05), rgba(0, 0, 0, 0.72)), url('/assets/background/BackgroundStage.png');
+  background-size: cover;
+  background-position: center;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
