@@ -1,0 +1,5 @@
+{
+  "name": "@sharktank/web",
+  "private": true,
+  "type": "module"
+}

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SharkTank Demo</title>
+    <link rel="stylesheet" href="/apps/web/src/styles.css">
+  </head>
+  <body data-ai-mode="service">
+    <main class="page">
+      <section class="hero">
+        <p class="eyebrow">SharkTank Demo</p>
+        <h1>One local round. Deterministic rules. Structured judge banter.</h1>
+        <p class="intro">
+          This demo validates the core loop with a switchable local mock adapter or local orchestration service.
+        </p>
+      </section>
+
+      <section class="layout">
+        <div class="panel">
+          <div class="panel-header">
+            <h2>Round Control</h2>
+            <span id="state-badge" class="badge">LOBBY</span>
+          </div>
+
+          <form id="pitch-form" class="stack">
+            <label class="field">
+              <span>Your pitch</span>
+              <textarea
+                id="pitch-input"
+                name="pitch"
+                rows="6"
+                placeholder="Describe your product idea in one confident paragraph."
+                required
+              ></textarea>
+            </label>
+            <button type="submit" class="button primary">Submit pitch</button>
+          </form>
+
+          <form id="answer-form" class="stack hidden">
+            <label class="field">
+              <span>Answer the lead judge</span>
+              <textarea
+                id="answer-input"
+                name="answer"
+                rows="4"
+                placeholder="Respond with traction, numbers, or why your team can execute."
+                required
+              ></textarea>
+            </label>
+            <button type="submit" class="button primary">Send answer</button>
+          </form>
+
+          <div id="action-panel" class="stack hidden"></div>
+          <p id="error-message" class="error hidden"></p>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h2>Round Breakdown</h2>
+          </div>
+          <div id="summary" class="summary"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Judge Table</h2>
+        </div>
+        <div id="judges" class="judge-grid"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Transcript</h2>
+        </div>
+        <div id="transcript" class="transcript"></div>
+      </section>
+    </main>
+
+    <script type="module" src="/apps/web/src/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "sharktank",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "node apps/web/server.js",
+    "test": "node --test packages/game-engine/tests/*.test.js apps/ai-service/tests/*.test.js apps/web/tests/*.test.js"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "roundId": "discussion-round",
+  "sessionId": "fixture-session",
+  "founderId": "fixture-founder",
+  "pitch": "We built an AI pop-up studio that turns unused retail windows into interactive brand experiences in forty-eight hours.",
+  "evaluation": {
+    "clarity": 61,
+    "confidence": 58,
+    "originality": 91,
+    "business_viability": 43
+  },
+  "transcript": [
+    {
+      "speaker": "Founder",
+      "text": "The format is novel and customers love it, but our monetization still depends on bespoke brand campaigns."
+    }
+  ],
+  "discussionPolicy": {
+    "maxTurns": 2,
+    "disagreementThreshold": 10,
+    "minimumQuestionVariance": 2
+  }
+}

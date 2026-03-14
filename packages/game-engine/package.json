@@ -1,0 +1,5 @@
+{
+  "name": "@sharktank/game-engine",
+  "private": true,
+  "type": "module"
+}
