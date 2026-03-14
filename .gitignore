@@ -24,3 +24,11 @@ __pycache__/
 # IDEs
 .idea/
 .vscode/
+
+# Local agent skills/config
+.agent/
+.agents/
+.claude/
+.codex/
+.gemini/
+skills-lock.json
