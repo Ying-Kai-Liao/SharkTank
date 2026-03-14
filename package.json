@@ -8,6 +8,6 @@
   ],
   "scripts": {
     "dev:web": "npm run dev -w @sharktank/web",
-    "test": "node --test packages/game-engine/tests/*.test.js apps/ai-service/tests/*.test.js"
+    "test": "node --test packages/game-engine/tests/*.test.js apps/ai-service/tests/*.test.js apps/web/tests/*.test.js"
   }
 }
