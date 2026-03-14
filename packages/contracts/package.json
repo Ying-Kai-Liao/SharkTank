@@ -1,5 +1,6 @@
 {
   "name": "@sharktank/contracts",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "exports": "./src/index.js"
 }
