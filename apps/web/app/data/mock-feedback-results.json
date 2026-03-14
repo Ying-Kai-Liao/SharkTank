@@ -1,0 +1,27 @@
+{
+  "paragraphs": {
+    "accept": {
+      "good": [
+        "Your close was decisive, your storytelling stayed clear, and your deal structure created confidence. The judges read your clarity as execution strength, which turned momentum into a signed commitment. Keep this pacing and confidence because it makes risk feel manageable."
+      ],
+      "medium": [
+        "You secured a deal through strong energy and a believable market angle, but parts of your financial narrative still felt light. The judges accepted because they saw upside, not because every concern was resolved. Tighten your numbers and milestone logic to convert future rounds from cautious yes into high-conviction yes."
+      ],
+      "bad": [
+        "An offer was accepted, but mostly as a speculative bet rather than full confidence in the current plan. The judges liked your potential more than your execution detail, and they flagged several unanswered risks internally. Treat this as a save, then rebuild your unit economics and go-to-market proof before your next pitch."
+      ]
+    },
+    "disaccept": {
+      "good": [
+        "Rejecting all offers was disciplined and strategically sound in this round. Your score shows strong performance quality, and the feedback indicates you can likely negotiate better terms later if you keep traction moving. Preserve your leverage by improving evidence depth while maintaining the same narrative clarity."
+      ],
+      "medium": [
+        "You disaccepted all offers, which keeps ownership control but leaves meaningful risk on growth speed. The judges saw promise, yet your current package did not fully de-risk execution for premium terms. Focus next on stronger retention proof and cleaner economics so your next negotiation starts from a stronger position."
+      ],
+      "bad": [
+        "Disaccepting all offers in this round produced a weak outcome because the pitch left too many open questions for independent growth. Without partner capital, your path now depends on faster proof and sharper prioritization under tighter constraints. Rework positioning, validate demand quickly, and return with measurable traction to regain bargaining power."
+      ]
+    }
+  },
+  "defaultParagraph": "Feedback is not available right now. Please retry this round to generate a complete evaluation paragraph."
+}

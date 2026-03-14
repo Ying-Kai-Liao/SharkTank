@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import judgeDialogues from "./data/mock-judge-dialogues.json";
 import offerConversation from "./data/mock-offer-conversation.json";
 import ScoreBadge from "../components/ScoreBadge";
@@ -37,6 +38,9 @@ function formatOffer(offer) {
 }
 
 export default function Page() {
+  const router = useRouter();
+  const hasNavigatedFeedbackRef = useRef(false);
+
   const [phase, setPhase] = useState("intro");
   const [countdown, setCountdown] = useState(3);
   const [timeLeft, setTimeLeft] = useState(PITCH_SECONDS);
@@ -154,7 +158,28 @@ export default function Page() {
     }
   }
 
+  function moveToFeedbackScreen() {
+    if (!roundResult || hasNavigatedFeedbackRef.current) {
+      return;
+    }
+
+    hasNavigatedFeedbackRef.current = true;
+
+    const query = new URLSearchParams({
+      score: String(roundResult.score),
+      scoreTier: String(roundResult.scoreTier),
+      decisionType: String(roundResult.decisionType)
+    });
+
+    if (acceptedOfferJudgeId) {
+      query.set("acceptedJudgeId", acceptedOfferJudgeId);
+    }
+
+    router.push(`/feedback?${query.toString()}`);
+  }
+
   function handleStart() {
+    hasNavigatedFeedbackRef.current = false;
     setTimeLeft(PITCH_SECONDS);
     setCountdown(3);
     setPhase("countdown");
@@ -356,6 +381,18 @@ export default function Page() {
     return () => clearTimeout(timeoutId);
   }, [phase, roundResult]);
 
+  useEffect(() => {
+    if (phase !== "result" || !roundResult || hasNavigatedFeedbackRef.current) {
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      moveToFeedbackScreen();
+    }, 2200);
+
+    return () => clearTimeout(timeoutId);
+  }, [phase, roundResult]);
+
   return (
     <main className="relative h-screen overflow-hidden bg-black text-white">
       <ScoreBadge score={70} />
@@ -442,11 +479,12 @@ export default function Page() {
             <button
               suppressHydrationWarning
               type="button"
-              onClick={handleStart}
+              onClick={moveToFeedbackScreen}
               className="mt-6 rounded-xl border border-white/45 bg-white/10 px-5 py-2 text-sm font-semibold text-white transition hover:bg-white/20 md:text-base"
             >
-              Play Again
+              Continue to Feedback
             </button>
+            <p className="mt-3 text-xs text-white/70 md:text-sm">Moving to feedback screen...</p>
           </div>
         </section>
       )}
