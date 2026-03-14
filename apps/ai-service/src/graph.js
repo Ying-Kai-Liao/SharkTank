@@ -1,9 +1,14 @@
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { validateJudgeBundle } from "../../../packages/contracts/src/index.js";
 import { buildRoundContext } from "./context.js";
+import { createJudgeToolRegistry } from "./judges.js";
 import { createJudgeMemoryNamespaces, createRoundMemorySnapshot } from "./memory.js";
 import { evaluateDiscussionNeed, shouldContinueDiscussion } from "./policy.js";
-import { createFallbackJudgeDraft } from "./providers.js";
+import {
+  createFallbackJudgeDraft,
+  createFallbackPeerConsultation,
+  createNoopPeerConsultation
+} from "./providers.js";
 import {
   classifyProviderFailure,
   createConcurrencyLimiter,
@@ -11,20 +16,24 @@ import {
   getMinimumSuccessfulJudges,
   ProviderExecutionError
 } from "./resilience.js";
-import { discussionEntrySchema, memoryObservationSchema } from "./validation.js";
+import {
+  discussionEntrySchema,
+  memoryObservationSchema,
+  peerQueryLogEntrySchema
+} from "./validation.js";
 
 function mergeByJudgeId(current, update) {
   const next = [...current];
 
-  for (const draft of update) {
-    const index = next.findIndex((entry) => entry.judgeId === draft.judgeId);
+  for (const item of update) {
+    const index = next.findIndex((entry) => entry.judgeId === item.judgeId);
 
     if (index === -1) {
-      next.push(draft);
+      next.push(item);
       continue;
     }
 
-    next[index] = draft;
+    next[index] = item;
   }
 
   return next;
@@ -49,15 +58,26 @@ const graphState = Annotation.Root({
     reducer: mergeByJudgeId,
     default: () => []
   }),
+  peerConsultations: Annotation({
+    reducer: mergeByJudgeId,
+    default: () => []
+  }),
   providerDiagnostics: Annotation({
     reducer: (current, update) => [...current, ...update],
     default: () => []
   }),
   discussionDecision: Annotation(),
+  deliberationRound: Annotation({
+    default: () => 0
+  }),
   discussionTurn: Annotation({
     default: () => 0
   }),
   discussionLog: Annotation({
+    reducer: (current, update) => [...current, ...update],
+    default: () => []
+  }),
+  peerQueryLog: Annotation({
     reducer: (current, update) => [...current, ...update],
     default: () => []
   }),
@@ -90,17 +110,20 @@ async function buildContextNode(state) {
       state.request.judges.length,
       state.config.providerMinimumSuccessRatio
     ),
+    deliberationRound: 0,
     discussionTurn: 0
   };
 }
 
 function routeAfterDrafts(state) {
-  return state.discussionDecision.shouldDiscuss ? "discussion" : "finalize";
+  return state.discussionDecision.shouldDiscuss && state.request.discussionPolicy.maxRounds > 0
+    ? "peer_consultation"
+    : "finalize";
 }
 
-function routeAfterDiscussion(state) {
-  return shouldContinueDiscussion(state.judgeDrafts, state.request.discussionPolicy, state.discussionTurn)
-    ? "discussion"
+function routeAfterDeliberation(state) {
+  return shouldContinueDiscussion(state.judgeDrafts, state.request.discussionPolicy, state.deliberationRound)
+    ? "peer_consultation"
     : "finalize";
 }
 
@@ -152,6 +175,15 @@ function buildFallbackDiagnostics(error, metadata) {
   };
 }
 
+function createJudgeMemoryView(state, judge) {
+  const namespaces = state.memoryNamespaces[judge.id];
+
+  return {
+    persona: state.memoryStore.getPersona(namespaces.persona),
+    episodic: state.memoryStore.listEpisodes(namespaces.episodic)
+  };
+}
+
 async function executeDraftWithResilience(state, judge) {
   const metadata = buildProviderMetadata({
     stage: "draft",
@@ -190,7 +222,58 @@ async function executeDraftWithResilience(state, judge) {
   }
 }
 
-async function executeRevisionWithResilience(state, { judge, draft, peerDrafts, turn }) {
+async function executePeerConsultationWithResilience(state, { judge, draft, peerDrafts, turn }) {
+  const metadata = buildProviderMetadata({
+    stage: "peer_consultation",
+    judge,
+    turn
+  });
+  const memoryView = createJudgeMemoryView(state, judge);
+  const toolRegistry = createJudgeToolRegistry({
+    judge,
+    context: state.context,
+    memoryView,
+    peerAgentContext: {
+      peerDrafts,
+      maxQueriesPerRound: state.request.discussionPolicy.maxPeerQueriesPerRound,
+      maxPeerTargets: Math.min(state.request.discussionPolicy.maxPeerTargets, Math.max(1, peerDrafts.length))
+    }
+  });
+
+  try {
+    const result = await executeProviderOperation({
+      limiter: state.providerLimiter,
+      operation: () =>
+        state.provider.queryPeerAgents
+          ? state.provider.queryPeerAgents({
+              judge,
+              draft,
+              peerDrafts,
+              turn,
+              toolRegistry,
+              policy: state.request.discussionPolicy
+            })
+          : createNoopPeerConsultation({ judge, turn }),
+      retryPolicy: getRetryPolicy(state.config),
+      metadata
+    });
+
+    return {
+      consultation: result.value,
+      diagnostic: result.diagnostics
+    };
+  } catch (error) {
+    return {
+      consultation: createFallbackPeerConsultation({
+        judge,
+        turn
+      }),
+      diagnostic: buildFallbackDiagnostics(error, metadata)
+    };
+  }
+}
+
+async function executeRevisionWithResilience(state, { judge, draft, peerDrafts, peerConsultation, turn }) {
   const metadata = buildProviderMetadata({
     stage: "discussion",
     judge,
@@ -205,6 +288,7 @@ async function executeRevisionWithResilience(state, { judge, draft, peerDrafts, 
           judge,
           draft,
           peerDrafts,
+          peerConsultation,
           turn
         }),
       retryPolicy: getRetryPolicy(state.config),
@@ -244,12 +328,53 @@ async function draftJudgesNode(state) {
   };
 }
 
-async function discussionNode(state) {
-  const nextTurn = state.discussionTurn + 1;
+async function peerConsultationNode(state) {
+  const nextTurn = state.deliberationRound + 1;
+  const consultationResults = await Promise.all(
+    state.request.judges.map((judge, index) => {
+      const currentDraft = state.judgeDrafts.find((draft) => draft.judgeId === judge.id) ?? state.judgeDrafts[index];
+      const peerDrafts = state.judgeDrafts.filter((draft) => draft.judgeId !== judge.id);
+
+      if (!currentDraft) {
+        throw new Error(`Missing draft for judge ${judge.id} before deliberation.`);
+      }
+
+      return executePeerConsultationWithResilience(state, {
+        judge,
+        draft: currentDraft,
+        peerDrafts,
+        turn: nextTurn
+      });
+    })
+  );
+
+  return {
+    peerConsultations: consultationResults.map((result) => result.consultation),
+    peerQueryLog: consultationResults.map((result) =>
+      peerQueryLogEntrySchema.parse({
+        turn: result.consultation.turn,
+        judgeId: result.consultation.judgeId,
+        judgeName: result.consultation.judgeName,
+        queryUsed: result.consultation.queryUsed,
+        question: result.consultation.question,
+        targetJudgeIds: result.consultation.targetJudgeIds,
+        responseCount: result.consultation.responses.length,
+        reason: result.consultation.reason
+      })
+    ),
+    providerDiagnostics: consultationResults.map((result) => result.diagnostic)
+  };
+}
+
+async function deliberationNode(state) {
+  const nextTurn = state.deliberationRound + 1;
   const revisionResults = await Promise.all(
     state.request.judges.map((judge, index) => {
       const currentDraft = state.judgeDrafts.find((draft) => draft.judgeId === judge.id) ?? state.judgeDrafts[index];
       const peerDrafts = state.judgeDrafts.filter((draft) => draft.judgeId !== judge.id);
+      const peerConsultation =
+        state.peerConsultations.find((consultation) => consultation.judgeId === judge.id) ??
+        createNoopPeerConsultation({ judge, turn: nextTurn });
 
       if (!currentDraft) {
         throw new Error(`Missing draft for judge ${judge.id} before discussion.`);
@@ -259,20 +384,30 @@ async function discussionNode(state) {
         judge,
         draft: currentDraft,
         peerDrafts,
+        peerConsultation,
         turn: nextTurn
       });
     })
   );
   const revisedDrafts = revisionResults.map((result) => result.draft);
-  const discussionEntries = revisedDrafts.map((revisedDraft) =>
-    discussionEntrySchema.parse({
+  const discussionEntries = revisedDrafts.map((revisedDraft) => {
+    const consultation = state.peerConsultations.find((entry) => entry.judgeId === revisedDraft.judgeId);
+    const consultationSummary =
+      consultation?.queryUsed && consultation.responses.length
+        ? ` after consulting ${consultation.responses.map((response) => response.judgeName).join(", ")}`
+        : "";
+
+    return discussionEntrySchema.parse({
       turn: nextTurn,
       speaker: revisedDraft.judgeName,
-      summary: `${revisedDraft.judgeName} pressure-tests the panel around ${revisedDraft.concerns[0] ?? "risk"}.`
-    })
-  );
+      summary: `${revisedDraft.judgeName} pressure-tests the panel${consultationSummary} around ${
+        revisedDraft.concerns[0] ?? "risk"
+      }.`
+    });
+  });
 
   return {
+    deliberationRound: nextTurn,
     discussionTurn: nextTurn,
     judgeDrafts: revisedDrafts,
     discussionLog: discussionEntries,
@@ -321,7 +456,7 @@ async function persistMemoryNode(state) {
   };
 }
 
-export function createJudgeOrchestrationGraph(judges) {
+export function createJudgeOrchestrationGraph() {
   const workflow = new StateGraph(graphState).addNode("build_context", buildContextNode);
 
   workflow.addEdge(START, "build_context");
@@ -329,17 +464,19 @@ export function createJudgeOrchestrationGraph(judges) {
   workflow
     .addNode("draft_judges", draftJudgesNode)
     .addNode("discussion_router", discussionRouterNode)
-    .addNode("discussion", discussionNode)
+    .addNode("peer_consultation", peerConsultationNode)
+    .addNode("deliberation", deliberationNode)
     .addNode("finalize", finalizeNode)
     .addNode("persist_memory", persistMemoryNode)
     .addEdge("build_context", "draft_judges")
     .addEdge("draft_judges", "discussion_router")
     .addConditionalEdges("discussion_router", routeAfterDrafts, {
-      discussion: "discussion",
+      peer_consultation: "peer_consultation",
       finalize: "finalize"
     })
-    .addConditionalEdges("discussion", routeAfterDiscussion, {
-      discussion: "discussion",
+    .addEdge("peer_consultation", "deliberation")
+    .addConditionalEdges("deliberation", routeAfterDeliberation, {
+      peer_consultation: "peer_consultation",
       finalize: "finalize"
     })
     .addEdge("finalize", "persist_memory")

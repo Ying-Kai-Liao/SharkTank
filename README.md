@@ -17,8 +17,6 @@ The first version should not prioritize:
 
 - voice input or output
 - facial expressions or animation-driven logic
-- long-term judge memory
-- judge-to-judge discussion loops
 - complex social or party-game behavior
 
 ## Core Rule

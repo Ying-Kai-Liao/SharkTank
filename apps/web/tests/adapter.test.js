@@ -25,7 +25,7 @@ test("the demo loop accepts either the local mock adapter or the orchestration s
   const service = createJudgeOrchestrationService({
     config: {
       provider: "heuristic",
-      discussionMaxTurns: 2,
+      deliberationMaxRounds: 2,
       disagreementThreshold: 14,
       minimumQuestionVariance: 2,
       openAiModel: "gpt-4.1-mini"

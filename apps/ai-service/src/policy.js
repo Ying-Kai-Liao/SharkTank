@@ -30,8 +30,8 @@ export function evaluateDiscussionNeed(drafts, policy) {
   });
 }
 
-export function shouldContinueDiscussion(drafts, policy, turn) {
-  if (turn >= policy.maxTurns) {
+export function shouldContinueDiscussion(drafts, policy, round) {
+  if (round >= policy.maxRounds) {
     return false;
   }
 

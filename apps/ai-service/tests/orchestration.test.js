@@ -26,9 +26,11 @@ function createInput(name, overrides = {}) {
 function createTestService(options = {}) {
   const config = {
     provider: "heuristic",
-    discussionMaxTurns: 2,
+    deliberationMaxRounds: 3,
     disagreementThreshold: 14,
     minimumQuestionVariance: 2,
+    maxPeerQueriesPerRound: 1,
+    maxPeerTargets: 2,
     providerRetryAttempts: 3,
     providerRetryBaseBackoffMs: 5,
     providerRetryJitterMs: 0,
@@ -55,24 +57,26 @@ test("fixture output is a valid structured judge bundle", async () => {
   assert.equal(result.bundle.judgeResponses[0].judgeId, "rhea");
 });
 
-test("discussion is skipped when judge drafts already align", async () => {
+test("deliberation is skipped when judge drafts already align", async () => {
   const service = createTestService({
     memoryStore: new InMemoryJudgeMemoryStore()
   });
   const result = await service.run(createInput("aligned-round.json"), { includeDebug: true });
 
   assert.equal(result.debug.discussionTriggered, false);
-  assert.equal(result.debug.discussionTurns, 0);
+  assert.equal(result.debug.deliberationRounds, 0);
+  assert.equal(result.debug.peerQueryCount, 0);
 });
 
-test("discussion stays bounded when the policy triggers panel debate", async () => {
+test("deliberation stays bounded when the policy triggers panel debate", async () => {
   const fixture = createInput("disagreement-round.json");
   const service = createTestService();
   const result = await service.run(fixture, { includeDebug: true });
 
   assert.equal(result.debug.discussionTriggered, true);
-  assert.ok(result.debug.discussionTurns <= fixture.discussionPolicy.maxTurns);
+  assert.ok(result.debug.deliberationRounds <= fixture.discussionPolicy.maxRounds);
   assert.ok(result.debug.discussionLog.length >= JUDGE_PROFILES.length);
+  assert.ok(result.debug.resilience.stageCounts.peer_consultation >= JUDGE_PROFILES.length);
 });
 
 test("finalization does not expose authoritative state or internal traces", async () => {
@@ -81,6 +85,7 @@ test("finalization does not expose authoritative state or internal traces", asyn
 
   assert.ok(!("offers" in result.bundle));
   assert.ok(!("discussionLog" in result.bundle));
+  assert.ok(!("peerQueries" in result.bundle));
   assert.ok(result.bundle.judgeResponses.every((response) => !("score" in response)));
   assert.ok(result.debug.memoryWrites.every((entry) => !("evaluation" in entry)));
 });
@@ -121,7 +126,7 @@ test("judge draft generation respects the configured provider concurrency limit"
 
   assert.equal(maxActiveCalls, 2);
   assert.ok(duration >= 70);
-  assert.ok(duration < 140);
+  assert.ok(duration < 160);
 });
 
 test("debug output includes discussion retry diagnostics", async () => {
@@ -171,6 +176,55 @@ test("debug output includes discussion retry diagnostics", async () => {
   assert.equal(retryEntry.failures.length, 1);
 });
 
+test("peer query activity is exposed through debug metadata without changing the consumer bundle", async () => {
+  const service = createTestService({
+    provider: {
+      name: "peer-query-test",
+      async generateJudgeDraft({ judge }) {
+        return {
+          judgeId: judge.id,
+          judgeName: judge.name,
+          sentiment: judge.id === "rhea" ? "skeptical" : "interested",
+          shortReaction: `${judge.name} wants more clarity before leaning in.`,
+          question: `What shifts ${judge.name}'s position?`,
+          rationaleTags: ["peer_query"],
+          score: judge.id === "rhea" ? 61 : 78,
+          confidence: 70,
+          concerns: ["traction"]
+        };
+      },
+      async queryPeerAgents({ judge, turn, toolRegistry }) {
+        const result = await toolRegistry.ask_peer_agents.invoke({
+          question: `What is the strongest counterpoint ${judge.name} should hear?`,
+          targetJudgeIds: JUDGE_PROFILES.filter((peer) => peer.id !== judge.id)
+            .slice(0, 2)
+            .map((peer) => peer.id),
+          requestedFields: ["summary", "sentiment", "question"]
+        });
+
+        return {
+          judgeId: judge.id,
+          judgeName: judge.name,
+          turn,
+          ...result,
+          reason: result.reason
+        };
+      },
+      async reviseJudgeDraft({ draft }) {
+        return draft;
+      }
+    }
+  });
+
+  const result = await service.run(createInput("disagreement-round.json"), { includeDebug: true });
+
+  validateJudgeBundle(result.bundle);
+  assert.ok(result.debug.peerQueryCount > 0);
+  assert.equal(result.debug.toolUsage.peerQueries, result.debug.peerQueryCount);
+  assert.ok(result.debug.peerQueries.some((entry) => entry.queryUsed));
+  assert.ok(!("peerQueries" in result.bundle));
+});
+
 test("one exhausted judge draft falls back while preserving a valid bundle", async () => {
   const service = createTestService({
     config: {
@@ -214,6 +268,67 @@ test("one exhausted judge draft falls back while preserving a valid bundle", asy
   assert.equal(result.debug.resilience.fallbackCount, 1);
   assert.equal(result.debug.resilience.successfulJudgeCount, 2);
   assert.equal(result.debug.resilience.minimumSuccessfulJudges, 2);
+  assert.equal(exhaustedCall.fallbackUsed, true);
+});
+
+test("peer consultation degrades without breaking the bundle", async () => {
+  const service = createTestService({
+    config: {
+      providerRetryAttempts: 2,
+      providerRetryBaseBackoffMs: 0,
+      providerRetryMaxBackoffMs: 0
+    },
+    provider: {
+      name: "peer-degradation-test",
+      async generateJudgeDraft({ judge }) {
+        return {
+          judgeId: judge.id,
+          judgeName: judge.name,
+          sentiment: judge.id === "rhea" ? "skeptical" : "interested",
+          shortReaction: `${judge.name} wants more clarity before leaning in.`,
+          question: `What shifts ${judge.name}'s position?`,
+          rationaleTags: ["peer_degradation"],
+          score: judge.id === "rhea" ? 61 : 75,
+          confidence: 70,
+          concerns: ["traction"]
+        };
+      },
+      async queryPeerAgents({ judge, turn, toolRegistry }) {
+        if (judge.id === "marco") {
+          const error = new Error("Upstream temporarily unavailable");
+          error.status = 503;
+          throw error;
+        }
+
+        const result = await toolRegistry.ask_peer_agents.invoke({
+          question: `What is the strongest counterpoint ${judge.name} should hear?`,
+          targetJudgeIds: JUDGE_PROFILES.filter((peer) => peer.id !== judge.id)
+            .slice(0, 1)
+            .map((peer) => peer.id),
+          requestedFields: ["summary", "sentiment"]
+        });
+
+        return {
+          judgeId: judge.id,
+          judgeName: judge.name,
+          turn,
+          ...result,
+          reason: result.reason
+        };
+      },
+      async reviseJudgeDraft({ draft }) {
+        return draft;
+      }
+    }
+  });
+
+  const result = await service.run(createInput("disagreement-round.json"), { includeDebug: true });
+  const exhaustedCall = result.debug.resilience.exhaustedCalls.find(
+    (entry) => entry.stage === "peer_consultation" && entry.judgeId === "marco"
+  );
+
+  validateJudgeBundle(result.bundle);
+  assert.equal(result.debug.resilience.degraded, true);
   assert.equal(exhaustedCall.fallbackUsed, true);
 });
 

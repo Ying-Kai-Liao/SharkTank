@@ -16,8 +16,10 @@
     }
   ],
   "discussionPolicy": {
-    "maxTurns": 2,
+    "maxRounds": 3,
     "disagreementThreshold": 10,
-    "minimumQuestionVariance": 2
+    "minimumQuestionVariance": 2,
+    "maxPeerQueriesPerRound": 1,
+    "maxPeerTargets": 2
   }
 }
