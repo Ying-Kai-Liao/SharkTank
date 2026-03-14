@@ -1,5 +1,10 @@
 import DialoguePanel from "./DialoguePanel";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
+const CAT_STANDING_FRAMES = Array.from(
+  { length: 16 },
+  (_, index) => `/assets/characters/standing/cat_standing/Cat_IdleNeutral_${index + 1}.png`
+);
 
 const characters = [
   {
@@ -9,7 +14,10 @@ const characters = [
     sittingSrc: "/assets/characters/sitting/cat_sitting/cat_sitting_01.png",
     sittingPositiveSrc: "/assets/characters/sitting_positive/Cat_IdlePositive/Cat_IdlePositive_01.png",
     sittingNegativeSrc: "/assets/characters/sitting_negative/Cat_IdleNegative/Cat_IdleNegative.png",
-    standingSrc: "/assets/characters/standing/cat_standing/cat_standing_01.png",
+    talkingPositiveSrc: "/assets/characters/talking_positive/Cat_TalkPositive/Cat_TalkPositive_1.png",
+    talkingNegativeSrc: "/assets/characters/talking_negative/Cat_TalkNegative/Cat_TalkNegative_1.png",
+    standingSrc: "/assets/characters/standing/cat_standing/Cat_IdleNeutral_1.png",
+    standingFrames: CAT_STANDING_FRAMES,
     heightClass: "h-[50vh] md:h-[70vh]"
   },
   {
@@ -19,6 +27,8 @@ const characters = [
     sittingSrc: "/assets/characters/sitting/dog_sitting/dog_sitting_01.png",
     sittingPositiveSrc: "/assets/characters/sitting_positive/Dog_IdlePositive/Dog_IdlePositive_01.png",
     sittingNegativeSrc: "/assets/characters/sitting_negative/Dog_IdleNegative/Dog_IdleNegative_01.png",
+    talkingPositiveSrc: "/assets/characters/talking_positive/Dog_TalkPositive/Dog_TalkPositive_1.png",
+    talkingNegativeSrc: "/assets/characters/talking_negative/Dog_TalkNegative/Dog_TalkNegative_1.png",
     standingSrc: "/assets/characters/standing/dog_standing/dog_standing_01.png",
     heightClass: "h-[48vh] md:h-[72vh]"
   },
@@ -29,6 +39,8 @@ const characters = [
     sittingSrc: "/assets/characters/sitting/shark_sitting/shark_sitting_01.png",
     sittingPositiveSrc: "/assets/characters/sitting_positive/Shark_IdlePositive/Shark_IdlePositive_01.png",
     sittingNegativeSrc: "/assets/characters/sitting_negative/Shark_IdleNegative/Shark_IdleNegative_01.png",
+    talkingPositiveSrc: "/assets/characters/talking_positive/Shark_TalkPositive/Shark_TalkPositive_1.png",
+    talkingNegativeSrc: "/assets/characters/talking_negative/Shark_TalkNegative/Shark_TalkNegative_1.png",
     standingSrc: "/assets/characters/standing/shark_standing/shark_standing_01.png",
     heightClass: "h-[47vh] md:h-[73vh]"
   }
@@ -59,6 +71,21 @@ export default function StageScene({
   statusText
 }) {
   const [hoveredJudgeId, setHoveredJudgeId] = useState(null);
+  const [standingFrameIndex, setStandingFrameIndex] = useState(0);
+
+  useEffect(() => {
+    const activeCharacter = characters.find((character) => character.id === activeSpeakerId);
+    if (!activeCharacter?.standingFrames?.length) {
+      setStandingFrameIndex(0);
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      setStandingFrameIndex((current) => (current + 1) % activeCharacter.standingFrames.length);
+    }, 120);
+
+    return () => clearInterval(intervalId);
+  }, [activeSpeakerId]);
 
   const focusedJudgeId = offerSelectionEnabled ? hoveredJudgeId : activeSpeakerId;
 
@@ -71,11 +98,24 @@ export default function StageScene({
   }
 
   function resolveSprite(character) {
+    const reaction = judgeReactions?.[character.id];
+
     if (character.id === activeSpeakerId) {
+      if (reaction === "positive" && character.talkingPositiveSrc) {
+        return character.talkingPositiveSrc;
+      }
+
+      if (reaction === "negative" && character.talkingNegativeSrc) {
+        return character.talkingNegativeSrc;
+      }
+
+      if (character.standingFrames?.length) {
+        return character.standingFrames[standingFrameIndex % character.standingFrames.length];
+      }
+
       return character.standingSrc;
     }
 
-    const reaction = judgeReactions?.[character.id];
     if (reaction === "positive") {
       return character.sittingPositiveSrc;
     }
