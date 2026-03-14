@@ -65,7 +65,7 @@ module.exports = /*#__PURE__*/JSON.parse('{"groups":[{"id":"reaction-group-1","r
 
 /***/ }),
 
-/***/ "./work-async-storage.external":
+/***/ "../app-render/work-async-storage.external":
 /*!*****************************************************************************!*\
   !*** external "next/dist/server/app-render/work-async-storage.external.js" ***!
   \*****************************************************************************/
