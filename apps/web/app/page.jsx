@@ -20,6 +20,15 @@ const OFFER_JUDGE_IDS = Object.entries(OFFER_BY_JUDGE)
   .filter(([, offer]) => Boolean(offer))
   .map(([judgeId]) => judgeId);
 const RESULT_ANIMATION_MS = 1800;
+const WINNING_SCORE_TIERS = new Set(["medium", "good"]);
+const AUDIO_PATHS = {
+  countdown: "/assets/music/Countdown.mp3",
+  debate: "/assets/music/DebateMusic.mp3",
+  lobby: "/assets/music/LobbyMusic.mp3",
+  nothing: "/assets/music/NothingMusic.mp3",
+  losing: "/assets/music/Losing.mp3",
+  winning: "/assets/music/Winning.mp3"
+};
 
 function formatTime(secondsLeft) {
   const minutes = Math.floor(secondsLeft / 60)
@@ -40,6 +49,14 @@ function formatOffer(offer) {
 export default function Page() {
   const router = useRouter();
   const hasNavigatedFeedbackRef = useRef(false);
+  const countdownAudioRef = useRef(null);
+  const debateMusicRef = useRef(null);
+  const lobbyMusicRef = useRef(null);
+  const nothingMusicRef = useRef(null);
+  const losingAudioRef = useRef(null);
+  const winningAudioRef = useRef(null);
+  const activeBackgroundTrackRef = useRef(null);
+  const hasPlayedResultAudioRef = useRef(false);
 
   const [phase, setPhase] = useState("intro");
   const [countdown, setCountdown] = useState(3);
@@ -114,6 +131,107 @@ export default function Page() {
     (phase === "judging" && !chatEnabled && !!activeLine) ||
     (phase === "offer-dialogue" && !!activeOfferLine);
 
+  function playAudioEffect(audioRef) {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    audio.currentTime = 0;
+    const playback = audio.play();
+    if (playback && typeof playback.catch === "function") {
+      playback.catch(() => {
+        // Ignore autoplay policy errors; user interaction will unlock audio.
+      });
+    }
+  }
+
+  function stopBackgroundMusic() {
+    if (debateMusicRef.current) {
+      debateMusicRef.current.pause();
+      debateMusicRef.current.currentTime = 0;
+    }
+
+    if (lobbyMusicRef.current) {
+      lobbyMusicRef.current.pause();
+      lobbyMusicRef.current.currentTime = 0;
+    }
+
+    if (nothingMusicRef.current) {
+      nothingMusicRef.current.pause();
+      nothingMusicRef.current.currentTime = 0;
+    }
+
+    activeBackgroundTrackRef.current = null;
+  }
+
+  function playBackgroundMusic(trackKey) {
+    if (!trackKey || activeBackgroundTrackRef.current === trackKey) {
+      return;
+    }
+
+    if (trackKey === "debate") {
+      if (lobbyMusicRef.current) {
+        lobbyMusicRef.current.pause();
+        lobbyMusicRef.current.currentTime = 0;
+      }
+      const debate = debateMusicRef.current;
+      if (debate) {
+        debate.currentTime = 0;
+        const playback = debate.play();
+        if (playback && typeof playback.catch === "function") {
+          playback.catch(() => {
+            // Ignore autoplay policy errors; user interaction will unlock audio.
+          });
+        }
+      }
+    }
+
+    if (trackKey === "lobby") {
+      if (debateMusicRef.current) {
+        debateMusicRef.current.pause();
+        debateMusicRef.current.currentTime = 0;
+      }
+      if (nothingMusicRef.current) {
+        nothingMusicRef.current.pause();
+        nothingMusicRef.current.currentTime = 0;
+      }
+      const lobby = lobbyMusicRef.current;
+      if (lobby) {
+        lobby.currentTime = 0;
+        const playback = lobby.play();
+        if (playback && typeof playback.catch === "function") {
+          playback.catch(() => {
+            // Ignore autoplay policy errors; user interaction will unlock audio.
+          });
+        }
+      }
+    }
+
+    if (trackKey === "nothing") {
+      if (debateMusicRef.current) {
+        debateMusicRef.current.pause();
+        debateMusicRef.current.currentTime = 0;
+      }
+      if (lobbyMusicRef.current) {
+        lobbyMusicRef.current.pause();
+        lobbyMusicRef.current.currentTime = 0;
+      }
+      const nothing = nothingMusicRef.current;
+      if (nothing) {
+        nothing.currentTime = 0;
+        const playback = nothing.play();
+        if (playback && typeof playback.catch === "function") {
+          playback.catch(() => {
+            // Ignore autoplay policy errors; user interaction will unlock audio.
+          });
+        }
+      }
+    }
+
+    activeBackgroundTrackRef.current = trackKey;
+  }
+
   async function resolveRoundResult(decisionType, acceptedJudgeId = null) {
     if (isResolvingResult || phase === "result-animation" || phase === "result") {
       return;
@@ -180,6 +298,7 @@ export default function Page() {
 
   function handleStart() {
     hasNavigatedFeedbackRef.current = false;
+    hasPlayedResultAudioRef.current = false;
     setTimeLeft(PITCH_SECONDS);
     setCountdown(3);
     setPhase("countdown");
@@ -335,11 +454,101 @@ export default function Page() {
   }
 
   useEffect(() => {
+    countdownAudioRef.current = new Audio(AUDIO_PATHS.countdown);
+    debateMusicRef.current = new Audio(AUDIO_PATHS.debate);
+    debateMusicRef.current.loop = true;
+    debateMusicRef.current.volume = 0.45;
+    lobbyMusicRef.current = new Audio(AUDIO_PATHS.lobby);
+    lobbyMusicRef.current.loop = true;
+    lobbyMusicRef.current.volume = 0.4;
+    nothingMusicRef.current = new Audio(AUDIO_PATHS.nothing);
+    nothingMusicRef.current.loop = true;
+    nothingMusicRef.current.volume = 0.35;
+    losingAudioRef.current = new Audio(AUDIO_PATHS.losing);
+    winningAudioRef.current = new Audio(AUDIO_PATHS.winning);
+
+    return () => {
+      stopBackgroundMusic();
+
+      if (countdownAudioRef.current) {
+        countdownAudioRef.current.pause();
+        countdownAudioRef.current = null;
+      }
+
+      debateMusicRef.current = null;
+      lobbyMusicRef.current = null;
+      nothingMusicRef.current = null;
+
+      if (losingAudioRef.current) {
+        losingAudioRef.current.pause();
+        losingAudioRef.current = null;
+      }
+
+      if (winningAudioRef.current) {
+        winningAudioRef.current.pause();
+        winningAudioRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const isJudgeTalking =
+      (phase === "judging" && !chatEnabled && Boolean(activeLine)) ||
+      (phase === "offer-dialogue" && Boolean(activeOfferLine));
+
+    const isPlayerPitchingOrWriting = phase === "pitch" || (phase === "judging" && chatEnabled);
+
+    const shouldSilenceBackgroundMusic =
+      phase === "countdown" ||
+      phase === "result-animation" ||
+      phase === "result";
+
+    if (shouldSilenceBackgroundMusic) {
+      stopBackgroundMusic();
+      return;
+    }
+
+    if (isJudgeTalking) {
+      playBackgroundMusic("debate");
+      return;
+    }
+
+    if (isPlayerPitchingOrWriting) {
+      playBackgroundMusic("lobby");
+      return;
+    }
+
+    playBackgroundMusic("nothing");
+  }, [phase, chatEnabled, activeLine, activeOfferLine]);
+
+  useEffect(() => {
+    if (phase !== "countdown" || countdown <= 0) {
+      return;
+    }
+
+    playAudioEffect(countdownAudioRef);
+  }, [phase, countdown]);
+
+  useEffect(() => {
+    if (phase !== "result" || !roundResult || hasPlayedResultAudioRef.current) {
+      return;
+    }
+
+    if (WINNING_SCORE_TIERS.has(roundResult.scoreTier)) {
+      playAudioEffect(winningAudioRef);
+    } else {
+      playAudioEffect(losingAudioRef);
+    }
+
+    hasPlayedResultAudioRef.current = true;
+  }, [phase, roundResult]);
+
+  useEffect(() => {
     if (phase !== "countdown") {
       return;
     }
 
-    if (countdown === 0) {
+    if (countdown < 0) {
       setPhase("pitch");
       return;
     }
@@ -446,7 +655,7 @@ export default function Page() {
       {phase === "countdown" && (
         <section className="absolute inset-0 z-40 flex items-center justify-center bg-black/55">
           <p className="font-display text-[6rem] leading-none text-white drop-shadow-[0_8px_22px_rgba(0,0,0,0.6)] md:text-[10rem]">
-            {countdown}
+            {countdown === 0 ? "START" : countdown}
           </p>
         </section>
       )}
