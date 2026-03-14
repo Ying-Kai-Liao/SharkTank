@@ -1,5 +1,5 @@
 {
-  "/api/round-result/route": "app/api/round-result/route.js",
   "/api/judge-reactions/route": "app/api/judge-reactions/route.js",
+  "/api/round-result/route": "app/api/round-result/route.js",
   "/page": "app/page.js"
 }

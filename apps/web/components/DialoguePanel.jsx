@@ -50,6 +50,7 @@ export default function DialoguePanel({
 
           {showAdvance && (
             <button
+              suppressHydrationWarning
               type="button"
               onClick={onAdvance}
               className="rounded-md border border-white/40 px-3 py-1 text-xs font-semibold text-white transition hover:bg-white/10 md:text-sm"
@@ -66,6 +67,7 @@ export default function DialoguePanel({
             Enter Message
           </label>
           <input
+            suppressHydrationWarning
             id="message-input"
             name="message"
             placeholder="Enter Message..."
@@ -75,6 +77,7 @@ export default function DialoguePanel({
             className="h-10 flex-1 rounded-md border border-white/45 bg-black/35 px-3 text-sm text-white outline-none ring-0 placeholder:text-white/75 focus:border-white md:h-12 md:px-4 md:text-xl"
           />
           <button
+            suppressHydrationWarning
             type="submit"
             disabled={sendDisabled}
             className="h-10 min-w-20 rounded-md border border-white/55 bg-black/20 px-4 text-base font-semibold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 md:h-12 md:min-w-28 md:text-2xl"

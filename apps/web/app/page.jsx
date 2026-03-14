@@ -395,6 +395,7 @@ export default function Page() {
               When you press Start, a 3-2-1 countdown begins, then your pitch timer starts.
             </p>
             <button
+              suppressHydrationWarning
               type="button"
               onClick={handleStart}
               className="rounded-xl border border-white/45 bg-white/10 px-6 py-3 text-base font-semibold text-white transition hover:bg-white/20 md:text-lg"
@@ -439,6 +440,7 @@ export default function Page() {
               Decision: {roundResult.decisionType === "accept" ? "Accepted an offer" : "Disaccepted offers"}
             </p>
             <button
+              suppressHydrationWarning
               type="button"
               onClick={handleStart}
               className="mt-6 rounded-xl border border-white/45 bg-white/10 px-5 py-2 text-sm font-semibold text-white transition hover:bg-white/20 md:text-base"
