@@ -1,0 +1,18 @@
+{
+  "roundId": "aligned-round",
+  "sessionId": "fixture-session",
+  "founderId": "fixture-founder",
+  "pitch": "We run a subscription analytics platform for independent gyms with strong retention, clean onboarding, and a clear revenue model.",
+  "evaluation": {
+    "clarity": 84,
+    "confidence": 81,
+    "originality": 72,
+    "business_viability": 86
+  },
+  "transcript": [
+    {
+      "speaker": "Founder",
+      "text": "We help independent gyms grow recurring revenue through member retention analytics and simple pricing."
+    }
+  ]
+}
