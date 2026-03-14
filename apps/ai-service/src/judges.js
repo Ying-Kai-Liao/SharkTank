@@ -10,6 +10,21 @@ function getTranscriptQuote(transcript) {
   return founderEntry?.text ?? transcript.at(-1)?.text ?? "";
 }
 
+function formatPeerSummary(draft) {
+  const concern = draft.concerns[0] ?? "risk";
+  return `${draft.judgeName} is ${draft.sentiment} and pushes on ${concern}.`;
+}
+
+function normalizeRequestedFields(values) {
+  const defaults = ["summary", "sentiment", "question", "concerns", "score"];
+  const allowed = new Set(defaults);
+  const requested = (Array.isArray(values) ? values : defaults)
+    .map((value) => String(value ?? "").trim())
+    .filter((value) => allowed.has(value));
+
+  return requested.length ? requested : defaults;
+}
+
 function createBaseTools({ context, memoryView }) {
   return {
     read_round_snapshot: tool(
@@ -94,6 +109,69 @@ function createJudgeSpecificTool(judge, context) {
   );
 }
 
+function createPeerAgentTool({ judge, peerAgentContext }) {
+  const querySchema = z.object({
+    question: z.string().min(1),
+    targetJudgeIds: z.array(z.string().min(1)).default([]),
+    requestedFields: z.array(z.string().min(1)).default([])
+  });
+  let queryCount = 0;
+
+  return tool(
+    async ({ question, targetJudgeIds = [], requestedFields = [] }) => {
+      queryCount += 1;
+
+      if (queryCount > peerAgentContext.maxQueriesPerRound) {
+        return {
+          queryUsed: false,
+          question,
+          targetJudgeIds: [],
+          requestedFields: normalizeRequestedFields(requestedFields),
+          responses: [],
+          denied: true,
+          truncated: false,
+          reason: "Peer query budget exhausted for this deliberation round."
+        };
+      }
+
+      const requested = normalizeRequestedFields(requestedFields);
+      const preferredTargets = targetJudgeIds.length
+        ? targetJudgeIds.filter((judgeId) => judgeId !== judge.id)
+        : peerAgentContext.peerDrafts.map((draft) => draft.judgeId);
+      const selectedPeers = peerAgentContext.peerDrafts
+        .filter((draft) => preferredTargets.includes(draft.judgeId))
+        .slice(0, peerAgentContext.maxPeerTargets);
+
+      return {
+        queryUsed: selectedPeers.length > 0,
+        question,
+        targetJudgeIds: selectedPeers.map((draft) => draft.judgeId),
+        requestedFields: requested,
+        responses: selectedPeers.map((draft) => ({
+          judgeId: draft.judgeId,
+          judgeName: draft.judgeName,
+          sentiment: draft.sentiment,
+          question: draft.question,
+          concerns: draft.concerns,
+          score: draft.score,
+          summary: formatPeerSummary(draft)
+        })),
+        denied: false,
+        truncated: preferredTargets.length > selectedPeers.length,
+        reason:
+          selectedPeers.length > 0
+            ? "Returned bounded structured peer summaries."
+            : "No eligible peer summaries matched the request."
+      };
+    },
+    {
+      name: "ask_peer_agents",
+      description: "Request bounded structured summaries from selected peer judges during deliberation.",
+      schema: querySchema
+    }
+  );
+}
+
 export function createJudgePersona(judge) {
   const dominantDimension = getPrimaryDimension(judge).replaceAll("_", " ");
 
@@ -107,11 +185,16 @@ export function createJudgePersona(judge) {
   };
 }
 
-export function createJudgeToolRegistry({ judge, context, memoryView }) {
+export function createJudgeToolRegistry({ judge, context, memoryView, peerAgentContext = null }) {
   const baseTools = createBaseTools({ context, memoryView });
-
-  return Object.freeze({
+  const registry = {
     ...baseTools,
     judge_probe: createJudgeSpecificTool(judge, context)
-  });
+  };
+
+  if (peerAgentContext) {
+    registry.ask_peer_agents = createPeerAgentTool({ judge, peerAgentContext });
+  }
+
+  return Object.freeze(registry);
 }

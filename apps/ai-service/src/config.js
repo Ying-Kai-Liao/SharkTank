@@ -1,13 +1,17 @@
 import dotenv from "dotenv";
 import { z } from "zod";
 
+import { DEFAULT_DISCUSSION_POLICY } from "../../../packages/contracts/src/index.js";
+
 dotenv.config({ quiet: true });
 
 const configSchema = z.object({
   provider: z.enum(["heuristic", "openai"]).default("heuristic"),
-  discussionMaxTurns: z.coerce.number().int().min(0).default(2),
-  disagreementThreshold: z.coerce.number().int().min(0).default(14),
-  minimumQuestionVariance: z.coerce.number().int().min(1).default(2),
+  deliberationMaxRounds: z.coerce.number().int().min(0).default(DEFAULT_DISCUSSION_POLICY.maxRounds),
+  disagreementThreshold: z.coerce.number().int().min(0).default(DEFAULT_DISCUSSION_POLICY.disagreementThreshold),
+  minimumQuestionVariance: z.coerce.number().int().min(1).default(DEFAULT_DISCUSSION_POLICY.minimumQuestionVariance),
+  maxPeerQueriesPerRound: z.coerce.number().int().min(0).default(DEFAULT_DISCUSSION_POLICY.maxPeerQueriesPerRound),
+  maxPeerTargets: z.coerce.number().int().min(1).default(DEFAULT_DISCUSSION_POLICY.maxPeerTargets),
   providerRetryAttempts: z.coerce.number().int().min(1).default(3),
   providerRetryBaseBackoffMs: z.coerce.number().int().min(0).default(40),
   providerRetryJitterMs: z.coerce.number().int().min(0).default(20),
@@ -18,12 +22,44 @@ const configSchema = z.object({
   openAiModel: z.string().trim().default("gpt-4.1-mini")
 });
 
-export function loadAiServiceConfig(env = process.env) {
+function clampNumber(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+export function normalizeAiServiceConfig(input = {}) {
   const config = configSchema.parse({
+    provider: input.provider,
+    deliberationMaxRounds: input.deliberationMaxRounds ?? input.discussionMaxTurns,
+    disagreementThreshold: input.disagreementThreshold,
+    minimumQuestionVariance: input.minimumQuestionVariance,
+    maxPeerQueriesPerRound: input.maxPeerQueriesPerRound,
+    maxPeerTargets: input.maxPeerTargets,
+    providerRetryAttempts: input.providerRetryAttempts,
+    providerRetryBaseBackoffMs: input.providerRetryBaseBackoffMs,
+    providerRetryJitterMs: input.providerRetryJitterMs,
+    providerRetryMaxBackoffMs: input.providerRetryMaxBackoffMs,
+    providerMaxConcurrency: input.providerMaxConcurrency,
+    providerMinimumSuccessRatio: input.providerMinimumSuccessRatio,
+    openAiApiKey: input.openAiApiKey,
+    openAiModel: input.openAiModel
+  });
+
+  return {
+    ...config,
+    deliberationMaxRounds: clampNumber(config.deliberationMaxRounds, 0, 3),
+    maxPeerQueriesPerRound: clampNumber(config.maxPeerQueriesPerRound, 0, 3),
+    maxPeerTargets: clampNumber(config.maxPeerTargets, 1, 3)
+  };
+}
+
+export function loadAiServiceConfig(env = process.env) {
+  const config = normalizeAiServiceConfig({
     provider: env.JUDGE_ORCHESTRATION_PROVIDER,
-    discussionMaxTurns: env.JUDGE_DISCUSSION_MAX_TURNS,
+    deliberationMaxRounds: env.JUDGE_DELIBERATION_MAX_ROUNDS ?? env.JUDGE_DISCUSSION_MAX_TURNS,
     disagreementThreshold: env.JUDGE_DISCUSSION_DISAGREEMENT_THRESHOLD,
     minimumQuestionVariance: env.JUDGE_DISCUSSION_MIN_QUESTION_VARIANCE,
+    maxPeerQueriesPerRound: env.JUDGE_PEER_QUERY_MAX_QUERIES_PER_ROUND,
+    maxPeerTargets: env.JUDGE_PEER_QUERY_MAX_TARGETS,
     providerRetryAttempts: env.JUDGE_PROVIDER_RETRY_ATTEMPTS,
     providerRetryBaseBackoffMs: env.JUDGE_PROVIDER_RETRY_BASE_BACKOFF_MS,
     providerRetryJitterMs: env.JUDGE_PROVIDER_RETRY_JITTER_MS,
