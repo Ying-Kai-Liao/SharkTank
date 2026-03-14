@@ -1,7 +1,4 @@
 {
-  "/api/judge-reactions/route": "app/api/judge-reactions/route.js",
-  "/api/round-result/route": "app/api/round-result/route.js",
-  "/api/feedback/route": "app/api/feedback/route.js",
   "/page": "app/page.js",
   "/feedback/page": "app/feedback/page.js"
 }
