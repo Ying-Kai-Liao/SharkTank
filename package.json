@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev:web": "node apps/web/server.js",
-    "test": "node --test packages/game-engine/tests/*.test.js apps/ai-service/tests/*.test.js apps/web/tests/*.test.js"
+    "dev:web": "npm run dev -w @sharktank/web",
+    "test": "node --test packages/game-engine/tests/*.test.js apps/ai-service/tests/*.test.js"
   }
 }

@@ -1,0 +1,27 @@
+{
+  "conversation": [
+    {
+      "speakerId": "cat",
+      "text": "I like your traction. I can offer $180,000 for 12% if you focus on customer retention first."
+    },
+    {
+      "speakerId": "dog",
+      "text": "I am out for now. I need stronger evidence of defensibility before I invest."
+    },
+    {
+      "speakerId": "shark",
+      "text": "I will make an offer: $250,000 for 18%, and I want aggressive growth milestones."
+    }
+  ],
+  "offers": {
+    "cat": {
+      "amount": 180000,
+      "equity": 12
+    },
+    "dog": null,
+    "shark": {
+      "amount": 250000,
+      "equity": 18
+    }
+  }
+}
