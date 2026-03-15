@@ -78,7 +78,7 @@ function advanceToFollowUp(options = {}) {
   });
   state = applyAction(state, {
     type: PLAYER_ACTIONS.ADVANCE,
-    payload: createJudgeBundle(state.evaluation)
+    payload: { ...createJudgeBundle(state.evaluation), usePanel: false }
   });
   state = applyAction(state, { type: PLAYER_ACTIONS.ADVANCE });
   assert.equal(state.currentState, ROUND_STATES.FOLLOW_UP);
@@ -153,7 +153,7 @@ test("decline-to-answer in follow-up advances to round result when no offers gen
 
   state = applyAction(state, {
     type: PLAYER_ACTIONS.ADVANCE,
-    payload: createJudgeBundle(state.evaluation)
+    payload: { ...createJudgeBundle(state.evaluation), usePanel: false }
   });
   state = applyAction(state, { type: PLAYER_ACTIONS.ADVANCE });
   assert.equal(state.currentState, ROUND_STATES.FOLLOW_UP);
