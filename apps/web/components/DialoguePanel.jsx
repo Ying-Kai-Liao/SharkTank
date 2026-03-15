@@ -24,11 +24,17 @@ export default function DialoguePanel({
   onMicTrigger,
   onAdvance,
   showAdvance,
-  statusText
-}) {
-  const [visibleLength, setVisibleLength] = useState(typewriterEnabled ? 0 : text.length);
+  statusText,
+  micActive = false,
   typewriterEnabled = false,
+  insightTags = []
+}) {
+  const sendDisabled = !chatEnabled || !inputValue.trim();
+  const [visibleLength, setVisibleLength] = useState(typewriterEnabled ? 0 : text.length);
+
+  useEffect(() => {
     if (!typewriterEnabled) {
+      setVisibleLength(text.length);
       return;
     }
 

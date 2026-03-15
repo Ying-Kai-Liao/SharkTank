@@ -650,11 +650,8 @@ export default function Page() {
 
       const lines = offerDialogueLines.length ? offerDialogueLines : OFFER_CONVERSATION;
 
-      if (offerLineIndex < lines.length - 1) {
-        setOfferLineIndex((current) => current + 1);
-      const nextOfferIndex = findNextUniqueOfferLine(offerLineIndex, OFFER_CONVERSATION);
-
-      if (nextOfferIndex < OFFER_CONVERSATION.length) {
+      const nextOfferIndex = findNextUniqueOfferLine(offerLineIndex, lines);
+      if (nextOfferIndex < lines.length) {
         setOfferLineIndex(nextOfferIndex);
         return;
       }
