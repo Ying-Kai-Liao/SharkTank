@@ -1,12 +1,30 @@
-import { orchestrateJudgePanel, createJudgeOrchestrationService } from "../../../../../ai-service/src/service.js";
+import { orchestrateJudgePanel, createJudgeOrchestrationService } from "../../../../ai-service/src/service.js";
 import { JUDGE_PROFILES } from "../../../../../packages/game-engine/src/judges.js";
 
 const service = createJudgeOrchestrationService();
+
+function pickReactionFromMessage(message) {
+  const lower = (message || "").toLowerCase();
+  if (/customer|traction|revenue|growth|retention|market|paid|signed/.test(lower)) return "positive";
+  if (/problem|hard|struggle|fail|can't|cannot|unsure|don't know/.test(lower)) return "negative";
+  return "neutral";
+}
 
 export async function POST(request) {
   try {
     const body = await request.json();
     const mode = body?.mode || "initial";
+
+    if (body?.groupIndex !== undefined || mode === "reactions") {
+      const reaction = pickReactionFromMessage(body?.playerMessage);
+      return Response.json({
+        reactions: {
+          cat: reaction,
+          dog: reaction === "positive" ? "neutral" : reaction,
+          shark: reaction
+        }
+      });
+    }
 
     if (mode === "initial") {
       const input = {
