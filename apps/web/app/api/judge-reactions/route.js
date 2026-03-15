@@ -1,12 +1,59 @@
 import { orchestrateJudgePanel, createJudgeOrchestrationService } from "@sharktank/ai-service";
 import { JUDGE_PROFILES } from "@sharktank/game-engine";
 
-const service = createJudgeOrchestrationService();
+const JUDGE_TO_STAGE = {
+  rhea: "cat",
+  marco: "dog",
+  tori: "shark"
+};
+
+function pickReactionSentiment(playerMessage, judgeIndex) {
+  const lower = (playerMessage || "").toLowerCase();
+  const positiveSignals = ["growth", "revenue", "profit", "scale", "traction", "customers", "market", "evidence", "data", "proven"];
+  const negativeSignals = ["maybe", "hope", "not sure", "don't know", "unsure", "difficult", "struggling"];
+
+  const hasPositive = positiveSignals.some((word) => lower.includes(word));
+  const hasNegative = negativeSignals.some((word) => lower.includes(word));
+
+  if (hasPositive && !hasNegative) {
+    return "positive";
+  }
+
+  if (hasNegative && !hasPositive) {
+    return "negative";
+  }
+
+  return judgeIndex % 2 === 0 ? "positive" : "negative";
+}
+
+let service = null;
+
+function getService() {
+  if (!service) {
+    service = createJudgeOrchestrationService();
+  }
+
+  return service;
+}
 
 export async function POST(request) {
   try {
     const body = await request.json();
-    const mode = body?.mode || "initial";
+    const mode = body?.mode || "reaction";
+
+    if (mode === "reaction" && body.playerMessage !== undefined) {
+      const reactions = {};
+
+      JUDGE_PROFILES.forEach((judge, index) => {
+        const stageId = JUDGE_TO_STAGE[judge.id];
+
+        if (stageId) {
+          reactions[stageId] = pickReactionSentiment(body.playerMessage, index);
+        }
+      });
+
+      return Response.json({ reactions });
+    }
 
     if (mode === "initial") {
       const input = {
@@ -37,7 +84,7 @@ export async function POST(request) {
         founderActions: body.founderActions || []
       };
 
-      const result = await service.replan(input);
+      const result = await getService().replan(input);
 
       return Response.json({ turnIntents: result.turnIntents });
     }
