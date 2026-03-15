@@ -26,6 +26,10 @@ __pycache__/
 .idea/
 .vscode/
 
+# Voice API secrets (migrate to env; do not commit)
+voice api.txt
+voice api*.txt
+
 # Local agent skills/config
 .agent/
 .agents/

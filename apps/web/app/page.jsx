@@ -20,6 +20,7 @@ import {
 import offerConversation from "./data/mock-offer-conversation.json";
 import ScoreBadge from "../components/ScoreBadge";
 import StageScene from "../components/StageScene";
+import { useJudgeTTS } from "../hooks/useJudgeTTS";
 
 const PITCH_SECONDS = 45;
 const LIVE_REACTION_POLL_MS = 1_200;
@@ -234,6 +235,25 @@ export default function Page() {
                   : "";
 
   const showAdvance = phase === "offer-dialogue" && Boolean(activeOfferLine);
+
+  const judgeIdForTTS =
+    spotlightSpeakerId && ["cat", "dog", "shark"].includes(spotlightSpeakerId) ? spotlightSpeakerId : null;
+
+  const {
+    isLoading: ttsLoading,
+    error: ttsError,
+    isPlaying: ttsPlaying,
+    retry: ttsRetry,
+    stop: ttsStop
+  } = useJudgeTTS({
+    phase,
+    groupIndex,
+    lineIndex,
+    offerLineIndex,
+    dialogueText: phase === "judging" || phase === "offer-dialogue" ? dialogueText : "",
+    judgeId: judgeIdForTTS,
+    onPlaybackEnd: undefined
+  });
 
   function setRoundStateValue(nextState) {
     roundStateRef.current = nextState;
@@ -739,6 +759,11 @@ export default function Page() {
         onAdvance={handleAdvanceDialogue}
         showAdvance={showAdvance}
         statusText={statusText}
+        ttsLoading={ttsLoading}
+        ttsError={ttsError}
+        ttsPlaying={ttsPlaying}
+        onTtsRetry={ttsRetry}
+        onTtsSkip={ttsStop}
       />
 
       {phase === "pitch" && pitchTimer && (

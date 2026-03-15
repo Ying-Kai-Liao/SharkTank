@@ -18,9 +18,15 @@ export default function DialoguePanel({
   onSend,
   onAdvance,
   showAdvance,
-  statusText
+  statusText,
+  ttsLoading = false,
+  ttsError = null,
+  ttsPlaying = false,
+  onTtsRetry,
+  onTtsSkip
 }) {
   const sendDisabled = !chatEnabled || !inputValue.trim();
+  const showTtsControls = Boolean(ttsLoading || ttsError || ttsPlaying);
 
   function handleSubmit(event) {
     event.preventDefault();
@@ -45,7 +51,30 @@ export default function DialoguePanel({
         <div className="mb-3 flex items-center justify-between gap-3 text-xs text-stage-muted md:text-sm">
           <div className="flex items-center gap-3">
             <MicrophoneIcon />
-            <span>{chatEnabled ? "Press Enter or click Send" : "Read all judge dialogue first"}</span>
+            <span>
+              {showTtsControls && ttsLoading && "Loading…"}
+              {showTtsControls && ttsPlaying && !ttsLoading && "Playing…"}
+              {showTtsControls && ttsError && "Audio unavailable"}
+              {!showTtsControls && (chatEnabled ? "Press Enter or click Send" : "Read all judge dialogue first")}
+            </span>
+            {showTtsControls && onTtsSkip && (
+              <button
+                type="button"
+                onClick={onTtsSkip}
+                className="rounded-md border border-white/40 px-2 py-1 text-xs font-semibold text-white transition hover:bg-white/10"
+              >
+                Skip
+              </button>
+            )}
+            {showTtsControls && ttsError && onTtsRetry && (
+              <button
+                type="button"
+                onClick={onTtsRetry}
+                className="rounded-md border border-white/40 px-2 py-1 text-xs font-semibold text-white transition hover:bg-white/10"
+              >
+                Retry
+              </button>
+            )}
           </div>
 
           {showAdvance && (

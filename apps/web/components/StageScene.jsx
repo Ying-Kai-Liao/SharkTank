@@ -70,7 +70,12 @@ export default function StageScene({
   onSend,
   onAdvance,
   showAdvance,
-  statusText
+  statusText,
+  ttsLoading = false,
+  ttsError = null,
+  ttsPlaying = false,
+  onTtsRetry,
+  onTtsSkip
 }) {
   const [hoveredJudgeId, setHoveredJudgeId] = useState(null);
   const [standingFrameIndex, setStandingFrameIndex] = useState(0);
@@ -269,6 +274,11 @@ export default function StageScene({
           onAdvance={onAdvance}
           showAdvance={showAdvance}
           statusText={statusText}
+          ttsLoading={ttsLoading}
+          ttsError={ttsError}
+          ttsPlaying={ttsPlaying}
+          onTtsRetry={onTtsRetry}
+          onTtsSkip={onTtsSkip}
         />
       )}
     </section>
