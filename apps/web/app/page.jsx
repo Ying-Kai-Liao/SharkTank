@@ -1165,30 +1165,56 @@ export default function Page() {
       return;
     }
 
-    setPhase("debrief");
+    if (phase !== "result" && phase !== "debrief") {
+      setPhase("result");
+    }
 
     if (debriefFetchedRef.current) {
       return;
     }
 
-    const timeoutId = setTimeout(() => {
-      setPhase("result");
-    }, RESULT_ANIMATION_MS);
+    debriefFetchedRef.current = true;
+    setDebriefLoading(true);
 
-    return () => clearTimeout(timeoutId);
-  }, [phase, roundResult]);
+    fetch("/api/judge-debrief", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        evaluation: roundState.evaluation,
+        judgeResponses: roundState.judgeResponses,
+        transcript: roundState.transcript,
+        offers: roundState.offers,
+        roundId: "local-round",
+        sessionId: "local-session",
+        founderId: "local-founder"
+      })
+    })
+      .then((res) => res.ok ? res.json() : Promise.reject(new Error("Debrief fetch failed")))
+      .then((data) => {
+        setDebriefData(data.debrief);
+        setDebriefLoading(false);
+      })
+      .catch(() => {
+        setDebriefLoading(false);
+      });
+  }, [roundState.currentState, phase]);
 
   useEffect(() => {
-    if (phase !== "result" || !roundResult || hasNavigatedFeedbackRef.current) {
+    if (phase !== "result") {
       return;
     }
 
+    if (!hasPlayedResultChimeRef.current) {
+      hasPlayedResultChimeRef.current = true;
+      playResultChime(Boolean(acceptedOfferJudgeId));
+    }
+
     const timeoutId = setTimeout(() => {
-      moveToFeedbackScreen();
-    }, 2200);
+      setPhase("debrief");
+    }, 2500);
 
     return () => clearTimeout(timeoutId);
-  }, [phase, roundResult]);
+  }, [phase]);
 
   useEffect(() => {
     setCountdownAudioPlaying(phase === "countdown");
@@ -1398,6 +1424,26 @@ export default function Page() {
                 Decline to Answer
               </button>
             </div>
+          </div>
+        </section>
+      )}
+
+      {phase === "result" && (
+        <section className="absolute inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-3xl border border-white/25 bg-black/80 p-6 text-center backdrop-blur md:p-8">
+            <p className="font-display text-5xl text-white md:text-6xl">
+              {displayScore}
+            </p>
+            <p className="mt-2 text-base uppercase tracking-wide text-white/80 md:text-lg">
+              {displayScore >= 80 ? "Great" : displayScore >= 62 ? "Solid" : "Tough"} round
+            </p>
+            <p className="mt-4 text-sm text-white/90 md:text-base">
+              {acceptedOfferJudgeId
+                ? `Deal accepted with ${JUDGE_NAMES[acceptedOfferJudgeId]} — ${formatOffer(offersByJudge[acceptedOfferJudgeId])}`
+                : roundState.offers.length
+                  ? "You walked away from the table."
+                  : "No offers this round."}
+            </p>
           </div>
         </section>
       )}
