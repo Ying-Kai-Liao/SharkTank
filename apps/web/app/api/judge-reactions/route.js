@@ -1,57 +1,52 @@
-import reactionMatrix from "../../data/mock-judge-reactions.json";
+import { orchestrateJudgePanel, createJudgeOrchestrationService } from "../../../../../ai-service/src/service.js";
+import { JUDGE_PROFILES } from "../../../../../packages/game-engine/src/judges.js";
 
-const FALLBACK_REACTIONS = {
-  cat: "neutral",
-  dog: "neutral",
-  shark: "neutral"
-};
-
-function sanitizeReaction(value) {
-  if (value === "positive" || value === "negative" || value === "neutral") {
-    return value;
-  }
-
-  return "neutral";
-}
-
-function normalizeReactions(reactions = {}) {
-  return {
-    cat: sanitizeReaction(reactions.cat),
-    dog: sanitizeReaction(reactions.dog),
-    shark: sanitizeReaction(reactions.shark)
-  };
-}
+const service = createJudgeOrchestrationService();
 
 export async function POST(request) {
   try {
     const body = await request.json();
-    const index = Number.isInteger(body?.groupIndex) ? body.groupIndex : 0;
-    const groups = reactionMatrix?.groups || [];
+    const mode = body?.mode || "initial";
 
-    if (!groups.length) {
-      return Response.json({
-        sourceGroupId: "fallback",
-        reactions: FALLBACK_REACTIONS
-      });
+    if (mode === "initial") {
+      const input = {
+        roundId: body.roundId || "local-round",
+        sessionId: body.sessionId || "local-session",
+        founderId: body.founderId || "local-founder",
+        pitch: body.pitch || "",
+        evaluation: body.evaluation || null,
+        judges: body.judges || JUDGE_PROFILES,
+        transcript: body.transcript || []
+      };
+
+      const bundle = await orchestrateJudgePanel(input);
+
+      return Response.json({ bundle });
     }
 
-    const safeIndex = ((index % groups.length) + groups.length) % groups.length;
-    const selected = groups[safeIndex];
+    if (mode === "replan") {
+      const input = {
+        roundId: body.roundId || "local-round",
+        sessionId: body.sessionId || "local-session",
+        founderId: body.founderId || "local-founder",
+        pitch: body.pitch || "",
+        evaluation: body.evaluation || null,
+        judges: body.judges || JUDGE_PROFILES,
+        transcript: body.transcript || [],
+        turnNumber: body.turnNumber || 0,
+        founderActions: body.founderActions || []
+      };
 
-    return Response.json({
-      sourceGroupId: selected.id,
-      reactions: {
-        ...FALLBACK_REACTIONS,
-        ...normalizeReactions(selected.reactions || {})
-      }
-    });
-  } catch {
+      const result = await service.replan(input);
+
+      return Response.json({ turnIntents: result.turnIntents });
+    }
+
+    return Response.json({ error: "Invalid mode" }, { status: 400 });
+  } catch (error) {
     return Response.json(
-      {
-        sourceGroupId: "fallback",
-        reactions: FALLBACK_REACTIONS
-      },
-      { status: 200 }
+      { error: "judge_reactions_unavailable", message: error?.message || "Unknown error" },
+      { status: 500 }
     );
   }
 }
