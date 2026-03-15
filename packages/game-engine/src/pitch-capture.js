@@ -87,12 +87,153 @@ export function createMockPitchTranscriptSource({
   };
 }
 
-export function createLivePitchTranscriptSource() {
+export function createLivePitchTranscriptSource({
+  transcribeEndpoint = "/api/transcribe",
+  chunkIntervalMs = 3_000
+} = {}) {
+  let mediaRecorder = null;
+  let stream = null;
+  let chunkTimer = null;
+  let sequence = 0;
+  let stopped = false;
+
+  function releaseStream() {
+    if (stream) {
+      for (const track of stream.getTracks()) {
+        track.stop();
+      }
+      stream = null;
+    }
+  }
+
+  function stopRecorder() {
+    stopped = true;
+
+    if (chunkTimer !== null) {
+      clearInterval(chunkTimer);
+      chunkTimer = null;
+    }
+
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      try {
+        mediaRecorder.stop();
+      } catch {
+        // Recorder may already be inactive.
+      }
+    }
+
+    mediaRecorder = null;
+    releaseStream();
+  }
+
   return {
     sourceType: PITCH_SOURCE_TYPES.LIVE_STT,
-    start() {
-      return () => {};
+
+    start({ emitUpdate, startedAtMs = Date.now() }) {
+      stopped = false;
+      sequence = 0;
+
+      async function beginCapture() {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch {
+          // Microphone permission denied or unavailable -- emit an error
+          // indicator so the UI can respond, but do not crash the game loop.
+          emitUpdate({
+            eventId: "live-mic-error",
+            sequence: 0,
+            text: "[microphone unavailable]",
+            receivedAtMs: Date.now(),
+            sourceType: PITCH_SOURCE_TYPES.LIVE_STT
+          });
+          return;
+        }
+
+        if (stopped) {
+          releaseStream();
+          return;
+        }
+
+        const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+          ? "audio/webm;codecs=opus"
+          : "audio/webm";
+
+        mediaRecorder = new MediaRecorder(stream, { mimeType });
+        let chunks = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data && event.data.size > 0) {
+            chunks.push(event.data);
+          }
+        };
+
+        mediaRecorder.onstop = async () => {
+          if (!chunks.length) {
+            return;
+          }
+
+          const blob = new Blob(chunks, { type: mimeType });
+          chunks = [];
+
+          const currentSequence = sequence++;
+          const formData = new FormData();
+          formData.append("audio", blob, `chunk-${currentSequence}.webm`);
+          formData.append("sequence", String(currentSequence));
+
+          try {
+            const response = await fetch(transcribeEndpoint, {
+              method: "POST",
+              body: formData
+            });
+
+            if (!response.ok) {
+              return;
+            }
+
+            const payload = await response.json();
+            const text = (payload.text || "").trim();
+
+            if (!text) {
+              return;
+            }
+
+            emitUpdate({
+              eventId: `live-${currentSequence}`,
+              sequence: currentSequence,
+              text,
+              receivedAtMs: Date.now(),
+              sourceType: PITCH_SOURCE_TYPES.LIVE_STT
+            });
+          } catch {
+            // Network error -- silently skip this chunk.
+          }
+        };
+
+        mediaRecorder.start();
+
+        // Split recording into chunks at the configured interval.
+        chunkTimer = setInterval(() => {
+          if (mediaRecorder && mediaRecorder.state === "recording") {
+            mediaRecorder.stop();
+            // Restart recording for the next chunk.
+            try {
+              mediaRecorder.start();
+            } catch {
+              // Stream may have been released.
+            }
+          }
+        }, chunkIntervalMs);
+      }
+
+      beginCapture();
+
+      return () => {
+        stopRecorder();
+      };
     },
-    stop() {}
+
+    stop() {
+      stopRecorder();
+    }
   };
 }

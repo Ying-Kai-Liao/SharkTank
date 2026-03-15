@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   applyAction,
   createInitialGameState,
+  createLivePitchTranscriptSource,
   createMockPitchTranscriptSource,
   createPitchCaptureAdapter,
   getAllowedActions,
@@ -152,6 +153,8 @@ export default function Page() {
   const [bargainOfferId, setBargainOfferId] = useState(null);
   const [bargainAmount, setBargainAmount] = useState("");
   const [bargainEquity, setBargainEquity] = useState("");
+  const [pitchSourceType, setPitchSourceType] = useState(PITCH_SOURCE_TYPES.MOCK);
+  const [mediaRecorderAvailable, setMediaRecorderAvailable] = useState(false);
 
   const activeOfferLine = OFFER_CONVERSATION[offerLineIndex] || null;
   const pitchTimer = getPitchTimerSnapshot(roundState, nowMs);
@@ -302,6 +305,7 @@ export default function Page() {
     stopCapture("restart");
     hasNavigatedFeedbackRef.current = false;
 
+    const selectedSourceType = pitchSourceType;
     const initialState = createRoundState();
     const startedAtMs = Date.now();
     const startedState = applyAction(initialState, {
@@ -309,7 +313,7 @@ export default function Page() {
       payload: {
         durationSeconds: PITCH_SECONDS,
         startedAtMs,
-        sourceType: PITCH_SOURCE_TYPES.MOCK
+        sourceType: selectedSourceType
       }
     });
 
@@ -327,8 +331,13 @@ export default function Page() {
     setRoundResult(null);
     resetLiveReactionState();
 
+    const source =
+      selectedSourceType === PITCH_SOURCE_TYPES.LIVE_STT
+        ? createLivePitchTranscriptSource({ transcribeEndpoint: "/api/transcribe", chunkIntervalMs: 3_000 })
+        : createMockPitchTranscriptSource();
+
     const adapter = createPitchCaptureAdapter({
-      source: createMockPitchTranscriptSource(),
+      source,
       onTranscriptUpdate: (update) => {
         commitRoundAction(
           {
@@ -542,6 +551,14 @@ export default function Page() {
 
     advancePanelTurn();
   }
+
+  useEffect(() => {
+    setMediaRecorderAvailable(
+      typeof window !== "undefined" &&
+      typeof MediaRecorder !== "undefined" &&
+      typeof navigator?.mediaDevices?.getUserMedia === "function"
+    );
+  }, []);
 
   useEffect(() => {
     if (roundState.currentState !== ROUND_STATES.PITCH) {
@@ -770,6 +787,43 @@ export default function Page() {
             <p className="mb-6 text-sm text-white/75 md:text-base">
               Starting the round opens a real pitch-capture phase. The timer, transcript finalization, and pitch close all come from structured round state.
             </p>
+            <div className="mb-5 flex items-center gap-3">
+              <span className="text-sm text-white/80">Source:</span>
+              <button
+                suppressHydrationWarning
+                type="button"
+                onClick={() => setPitchSourceType(PITCH_SOURCE_TYPES.MOCK)}
+                className={`rounded-lg border px-4 py-2 text-sm font-semibold transition ${
+                  pitchSourceType === PITCH_SOURCE_TYPES.MOCK
+                    ? "border-white/60 bg-white/20 text-white"
+                    : "border-white/25 bg-white/5 text-white/60 hover:bg-white/10"
+                }`}
+              >
+                Mock
+              </button>
+              <div className="relative">
+                <button
+                  suppressHydrationWarning
+                  type="button"
+                  onClick={() => {
+                    if (mediaRecorderAvailable) {
+                      setPitchSourceType(PITCH_SOURCE_TYPES.LIVE_STT);
+                    }
+                  }}
+                  disabled={!mediaRecorderAvailable}
+                  title={!mediaRecorderAvailable ? "Live microphone requires a browser with MediaRecorder and getUserMedia support" : undefined}
+                  className={`rounded-lg border px-4 py-2 text-sm font-semibold transition ${
+                    pitchSourceType === PITCH_SOURCE_TYPES.LIVE_STT
+                      ? "border-white/60 bg-white/20 text-white"
+                      : mediaRecorderAvailable
+                        ? "border-white/25 bg-white/5 text-white/60 hover:bg-white/10"
+                        : "cursor-not-allowed border-white/15 bg-white/5 text-white/30"
+                  }`}
+                >
+                  Live Microphone
+                </button>
+              </div>
+            </div>
             <button
               suppressHydrationWarning
               type="button"
