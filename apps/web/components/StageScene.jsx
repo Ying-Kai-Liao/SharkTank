@@ -46,6 +46,12 @@ const characters = [
   }
 ];
 
+const STAGE_TO_JUDGE = {
+  cat: "rhea",
+  dog: "marco",
+  shark: "tori"
+};
+
 const sideClassMap = {
   left: "justify-self-end pr-20 md:pr-6",
   center: "justify-self-center",
@@ -70,7 +76,8 @@ export default function StageScene({
   onSend,
   onAdvance,
   showAdvance,
-  statusText
+  statusText,
+  judgeInsights
 }) {
   const [hoveredJudgeId, setHoveredJudgeId] = useState(null);
   const [standingFrameIndex, setStandingFrameIndex] = useState(0);
@@ -269,6 +276,12 @@ export default function StageScene({
           onAdvance={onAdvance}
           showAdvance={showAdvance}
           statusText={statusText}
+          insightTags={(() => {
+            if (!activeSpeakerId || !judgeInsights?.length) return null;
+            const judgeId = STAGE_TO_JUDGE[activeSpeakerId];
+            const insight = judgeInsights.find((j) => j.judgeId === judgeId);
+            return insight?.rationaleTags || null;
+          })()}
         />
       )}
     </section>
