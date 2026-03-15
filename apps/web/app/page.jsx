@@ -10,7 +10,6 @@ import {
   createPitchCaptureAdapter,
   getAllowedActions,
   getPitchTimerSnapshot,
-  isSpeechRecognitionSupported,
   JUDGE_PROFILES,
   PANEL_EVENT_TYPES,
   PLAYER_ACTIONS,
@@ -69,6 +68,25 @@ function joinTranscriptUpdates(updates) {
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function createJudgeBundle(evaluation) {
+  const leadQuestion = "What evidence do you have that customers will keep buying this?";
+
+  return {
+    leadQuestion,
+    judgeResponses: JUDGE_PROFILES.map((judge, index) => ({
+      judgeId: judge.id,
+      judgeName: judge.name,
+      sentiment: index === 0 ? "impressed" : "interested",
+      shortReaction: `${judge.name} sees enough traction to keep pressing on the core business case.`,
+      question: leadQuestion,
+      rationaleTags: [
+        evaluation.business_viability >= 70 ? "strong_monetization" : "needs_revenue_proof",
+        evaluation.clarity >= 70 ? "clear_pitch" : "needs_clarity"
+      ]
+    }))
+  };
 }
 
 function averageEvaluationScore(evaluation) {
@@ -135,6 +153,8 @@ export default function Page() {
   const [bargainOfferId, setBargainOfferId] = useState(null);
   const [bargainAmount, setBargainAmount] = useState("");
   const [bargainEquity, setBargainEquity] = useState("");
+  const [pitchSourceType, setPitchSourceType] = useState(PITCH_SOURCE_TYPES.MOCK);
+  const [mediaRecorderAvailable, setMediaRecorderAvailable] = useState(false);
 
   const activeOfferLine = OFFER_CONVERSATION[offerLineIndex] || null;
   const pitchTimer = getPitchTimerSnapshot(roundState, nowMs);
@@ -276,10 +296,6 @@ export default function Page() {
       query.set("acceptedJudgeId", acceptedOfferJudgeId);
     }
 
-    const currentState = roundStateRef.current;
-    const transcript = currentState.pitch || pitchTranscriptText || "";
-    query.set("transcript", transcript);
-
     startTransition(() => {
       router.push(`/feedback?${query.toString()}`);
     });
@@ -289,9 +305,7 @@ export default function Page() {
     stopCapture("restart");
     hasNavigatedFeedbackRef.current = false;
 
-    const useLive = isSpeechRecognitionSupported();
-    const sourceType = useLive ? PITCH_SOURCE_TYPES.LIVE_STT : PITCH_SOURCE_TYPES.MOCK;
-
+    const selectedSourceType = pitchSourceType;
     const initialState = createRoundState();
     const startedAtMs = Date.now();
     const startedState = applyAction(initialState, {
@@ -299,7 +313,7 @@ export default function Page() {
       payload: {
         durationSeconds: PITCH_SECONDS,
         startedAtMs,
-        sourceType
+        sourceType: selectedSourceType
       }
     });
 
@@ -317,9 +331,10 @@ export default function Page() {
     setRoundResult(null);
     resetLiveReactionState();
 
-    const source = useLive
-      ? createLivePitchTranscriptSource()
-      : createMockPitchTranscriptSource();
+    const source =
+      selectedSourceType === PITCH_SOURCE_TYPES.LIVE_STT
+        ? createLivePitchTranscriptSource({ transcribeEndpoint: "/api/transcribe", chunkIntervalMs: 3_000 })
+        : createMockPitchTranscriptSource();
 
     const adapter = createPitchCaptureAdapter({
       source,
@@ -381,43 +396,10 @@ export default function Page() {
     }
   }
 
-  async function advancePanelTurn(questionText) {
-    let resolvedQuestion = questionText;
-
-    if (!resolvedQuestion) {
-      try {
-        const currentState = roundStateRef.current;
-        const response = await fetch("/api/judge-reactions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mode: "replan",
-            pitch: currentState.pitch,
-            evaluation: currentState.evaluation,
-            transcript: currentState.transcript,
-            turnNumber: currentState.panel?.turn || 0,
-            founderActions: currentState.founderActions
-          })
-        });
-
-        if (response.ok) {
-          const payload = await response.json();
-          const intents = payload?.turnIntents;
-          if (Array.isArray(intents)) {
-            const askingJudge = intents.find((intent) => intent.intent === "ask" && intent.question);
-            if (askingJudge) {
-              resolvedQuestion = askingJudge.question;
-            }
-          }
-        }
-      } catch {
-        // Fall back to panel director's default question
-      }
-    }
-
+  function advancePanelTurn(questionText) {
     const nextState = commitRoundAction({
       type: PLAYER_ACTIONS.ADVANCE_PANEL_TURN,
-      payload: resolvedQuestion ? { question: resolvedQuestion } : {}
+      payload: questionText ? { question: questionText } : {}
     });
 
     if (nextState.currentState === ROUND_STATES.DEALS) {
@@ -571,6 +553,14 @@ export default function Page() {
   }
 
   useEffect(() => {
+    setMediaRecorderAvailable(
+      typeof window !== "undefined" &&
+      typeof MediaRecorder !== "undefined" &&
+      typeof navigator?.mediaDevices?.getUserMedia === "function"
+    );
+  }, []);
+
+  useEffect(() => {
     if (roundState.currentState !== ROUND_STATES.PITCH) {
       return;
     }
@@ -673,51 +663,11 @@ export default function Page() {
       return;
     }
 
-    const timeoutId = setTimeout(async () => {
+    const timeoutId = setTimeout(() => {
       initializeJudgingFlow();
-
-      let bundle = null;
-      try {
-        const response = await fetch("/api/judge-reactions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mode: "initial",
-            pitch: roundState.pitch,
-            evaluation: roundState.evaluation,
-            transcript: roundState.transcript
-          })
-        });
-
-        if (response.ok) {
-          const payload = await response.json();
-          bundle = payload?.bundle;
-        }
-      } catch {
-        // Fall back to heuristic bundle below
-      }
-
-      if (!bundle || !bundle.judgeResponses || !bundle.leadQuestion) {
-        const fallbackQuestion = "What evidence do you have that customers will keep buying this?";
-        bundle = {
-          leadQuestion: fallbackQuestion,
-          judgeResponses: JUDGE_PROFILES.map((judge, index) => ({
-            judgeId: judge.id,
-            judgeName: judge.name,
-            sentiment: index === 0 ? "impressed" : "interested",
-            shortReaction: `${judge.name} sees enough traction to keep pressing on the core business case.`,
-            question: fallbackQuestion,
-            rationaleTags: [
-              roundState.evaluation?.business_viability >= 70 ? "strong_monetization" : "needs_revenue_proof",
-              roundState.evaluation?.clarity >= 70 ? "clear_pitch" : "needs_clarity"
-            ]
-          }))
-        };
-      }
-
       commitRoundAction({
         type: PLAYER_ACTIONS.ADVANCE,
-        payload: bundle
+        payload: createJudgeBundle(roundState.evaluation)
       });
       setPhase("judging");
       advancePanelTurn();
@@ -837,6 +787,43 @@ export default function Page() {
             <p className="mb-6 text-sm text-white/75 md:text-base">
               Starting the round opens a real pitch-capture phase. The timer, transcript finalization, and pitch close all come from structured round state.
             </p>
+            <div className="mb-5 flex items-center gap-3">
+              <span className="text-sm text-white/80">Source:</span>
+              <button
+                suppressHydrationWarning
+                type="button"
+                onClick={() => setPitchSourceType(PITCH_SOURCE_TYPES.MOCK)}
+                className={`rounded-lg border px-4 py-2 text-sm font-semibold transition ${
+                  pitchSourceType === PITCH_SOURCE_TYPES.MOCK
+                    ? "border-white/60 bg-white/20 text-white"
+                    : "border-white/25 bg-white/5 text-white/60 hover:bg-white/10"
+                }`}
+              >
+                Mock
+              </button>
+              <div className="relative">
+                <button
+                  suppressHydrationWarning
+                  type="button"
+                  onClick={() => {
+                    if (mediaRecorderAvailable) {
+                      setPitchSourceType(PITCH_SOURCE_TYPES.LIVE_STT);
+                    }
+                  }}
+                  disabled={!mediaRecorderAvailable}
+                  title={!mediaRecorderAvailable ? "Live microphone requires a browser with MediaRecorder and getUserMedia support" : undefined}
+                  className={`rounded-lg border px-4 py-2 text-sm font-semibold transition ${
+                    pitchSourceType === PITCH_SOURCE_TYPES.LIVE_STT
+                      ? "border-white/60 bg-white/20 text-white"
+                      : mediaRecorderAvailable
+                        ? "border-white/25 bg-white/5 text-white/60 hover:bg-white/10"
+                        : "cursor-not-allowed border-white/15 bg-white/5 text-white/30"
+                  }`}
+                >
+                  Live Microphone
+                </button>
+              </div>
+            </div>
             <button
               suppressHydrationWarning
               type="button"

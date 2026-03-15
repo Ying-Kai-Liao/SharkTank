@@ -1,5 +1,1 @@
-{
-  "/api/judge-reactions/route": "app/api/judge-reactions/route.js",
-  "/page": "app/page.js",
-  "/feedback/page": "app/feedback/page.js"
-}
+{}
