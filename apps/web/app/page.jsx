@@ -252,7 +252,9 @@ export default function Page() {
                   ? `Player replies sent: ${chatHistory.length}`
                   : "";
 
-  const showAdvance = phase === "offer-dialogue" && Boolean(activeOfferLine);
+  const showAdvance =
+    (phase === "offer-dialogue" && Boolean(activeOfferLine)) ||
+    (phase === "judging" && !chatEnabled && Boolean(latestPanelQuestion));
 
   function playAudioEffect(audioRef) {
     const audio = audioRef.current;
@@ -432,8 +434,6 @@ export default function Page() {
     setCountdownValue(COUNTDOWN_START);
     setPhase("countdown");
 
-    setGroupIndex(0);
-    setLineIndex(0);
     setChatEnabled(false);
     setChatInput("");
     setChatHistory([]);
@@ -518,8 +518,14 @@ export default function Page() {
         return;
       }
 
-      if (offerLineIndex < OFFER_CONVERSATION.length - 1) {
-        setOfferLineIndex((current) => current + 1);
+      const currentText = activeOfferLine.text;
+      let nextIndex = offerLineIndex + 1;
+      while (nextIndex < OFFER_CONVERSATION.length && OFFER_CONVERSATION[nextIndex].text === currentText) {
+        nextIndex++;
+      }
+
+      if (nextIndex < OFFER_CONVERSATION.length) {
+        setOfferLineIndex(nextIndex);
         return;
       }
 
@@ -536,10 +542,19 @@ export default function Page() {
       }
 
       setPhase("offer-select");
+      return;
+    }
+
+    if (phase === "judging" && panelAwaitingAnswer) {
+      setChatEnabled(true);
     }
   }
 
   function advancePanelTurn(questionText) {
+    const prevQuestion = [...(roundStateRef.current.panel?.events || [])]
+      .reverse()
+      .find((e) => e.type === PANEL_EVENT_TYPES.JUDGE_QUESTION);
+
     const nextState = commitRoundAction({
       type: PLAYER_ACTIONS.ADVANCE_PANEL_TURN,
       payload: questionText ? { question: questionText } : {}
@@ -570,6 +585,19 @@ export default function Page() {
     }
 
     if (nextState.panel?.awaitingAnswer) {
+      const newQuestion = [...(nextState.panel.events || [])]
+        .reverse()
+        .find((e) => e.type === PANEL_EVENT_TYPES.JUDGE_QUESTION);
+
+      if (prevQuestion && newQuestion && newQuestion.text === prevQuestion.text) {
+        commitRoundAction({
+          type: PLAYER_ACTIONS.SUBMIT_ANSWER,
+          payload: { answer: "..." }
+        });
+        advancePanelTurn();
+        return;
+      }
+
       setChatEnabled(true);
     }
   }
@@ -761,7 +789,7 @@ export default function Page() {
 
   useEffect(() => {
     const isJudgeTalking =
-      (phase === "judging" && !chatEnabled && Boolean(activeLine)) ||
+      (phase === "judging" && !chatEnabled && Boolean(latestPanelQuestion)) ||
       (phase === "offer-dialogue" && Boolean(activeOfferLine));
 
     const isPlayerPitchingOrWriting = phase === "pitch" || (phase === "judging" && chatEnabled);
@@ -787,7 +815,7 @@ export default function Page() {
     }
 
     playBackgroundMusic("nothing");
-  }, [phase, chatEnabled, activeLine, activeOfferLine]);
+  }, [phase, chatEnabled, latestPanelQuestion, activeOfferLine]);
 
   useEffect(() => {
     if (phase !== "result" || !roundResult || hasPlayedResultAudioRef.current) {
