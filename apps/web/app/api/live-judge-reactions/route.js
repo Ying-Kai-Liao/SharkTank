@@ -1,4 +1,4 @@
-import { createLiveJudgeReactionService } from "../../../../ai-service/src/live-reactions.js";
+import { createLiveJudgeReactionService } from "@sharktank/ai-service/live-reactions";
 
 const liveReactionService = createLiveJudgeReactionService();
 
