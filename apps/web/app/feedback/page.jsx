@@ -14,14 +14,40 @@ function formatDecision(decisionType) {
   return decisionType === "accept" ? "Accepted Offer" : "Disaccepted Offers";
 }
 
+function letterGrade(score) {
+  if (score >= 90) return { letter: "S", color: "text-yellow-300", bar: "bg-yellow-300" };
+  if (score >= 80) return { letter: "A", color: "text-emerald-300", bar: "bg-emerald-400" };
+  if (score >= 65) return { letter: "B", color: "text-sky-300", bar: "bg-sky-400" };
+  if (score >= 50) return { letter: "C", color: "text-amber-300", bar: "bg-amber-400" };
+  if (score >= 35) return { letter: "D", color: "text-orange-400", bar: "bg-orange-400" };
+  return { letter: "F", color: "text-rose-400", bar: "bg-rose-500" };
+}
+
+const DIMENSION_LABELS = {
+  clarity: "Clarity",
+  confidence: "Confidence",
+  originality: "Originality",
+  business_viability: "Business Viability",
+};
+
 function FeedbackPageContent() {
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState(null);
   const [error, setError] = useState("");
+    const [evaluation, setEvaluation] = useState(null);
 
   useEffect(() => {
     const score = searchParams.get("score") || "0";
+    const evalParam = searchParams.get("eval");
+    if (evalParam) {
+      try {
+        setEvaluation(JSON.parse(evalParam));
+      } catch {
+        // ignore malformed eval
+      }
+    }
+
     const scoreTier = searchParams.get("scoreTier") || "medium";
     const decisionType = searchParams.get("decisionType") || "disaccept";
     const acceptedJudgeId = searchParams.get("acceptedJudgeId") || "";
@@ -96,21 +122,47 @@ function FeedbackPageContent() {
           {!loading && !error && feedback && (
             <>
               <div className="mt-6 grid gap-3 md:grid-cols-3">
-                <div className="rounded-xl border border-white/20 bg-white/5 p-4">
-                  <p className="text-xs uppercase tracking-wider text-white/70">Score</p>
-                  <p className="font-display mt-2 text-3xl text-white">{feedback.score}</p>
+                <div className="rounded-xl border border-white/20 bg-white/5 p-4 flex flex-col items-center justify-center">
+                  <p className="text-xs uppercase tracking-wider text-white/70">Total Score</p>
+                  <p className="font-display mt-2 text-4xl text-white">{feedback.score}<span className="text-lg text-white/50">/100</span></p>
+                </div>
+
+                <div className={`rounded-xl border border-white/20 bg-white/5 p-4 flex flex-col items-center justify-center`}>
+                  <p className="text-xs uppercase tracking-wider text-white/70">Grade</p>
+                  <p className={`font-display mt-2 text-5xl font-bold ${letterGrade(Number(feedback.score)).color}`}>
+                    {letterGrade(Number(feedback.score)).letter}
+                  </p>
                 </div>
 
                 <div className="rounded-xl border border-white/20 bg-white/5 p-4">
                   <p className="text-xs uppercase tracking-wider text-white/70">Offer Decision</p>
                   <p className="mt-2 text-base text-white md:text-lg">{formatDecision(feedback.decisionType)}</p>
-                </div>
-
-                <div className="rounded-xl border border-white/20 bg-white/5 p-4">
-                  <p className="text-xs uppercase tracking-wider text-white/70">Score Tier</p>
-                  <p className="mt-2 text-base uppercase text-white md:text-lg">{feedback.scoreTier}</p>
+                  <p className="mt-1 text-xs uppercase tracking-wide text-white/50">{feedback.scoreTier} tier</p>
                 </div>
               </div>
+
+              {evaluation && (
+                <div className="mt-5 rounded-2xl border border-white/20 bg-white/5 p-5">
+                  <p className="mb-4 text-xs uppercase tracking-wider text-white/70">Score Breakdown</p>
+                  <div className="flex flex-col gap-3">
+                    {Object.entries(DIMENSION_LABELS).map(([key, label]) => {
+                      const val = evaluation[key] ?? 0;
+                      const grade = letterGrade(val);
+                      return (
+                        <div key={key}>
+                          <div className="mb-1 flex items-center justify-between text-sm">
+                            <span className="text-white/85">{label}</span>
+                            <span className={`font-semibold ${grade.color}`}>{val} <span className="text-white/50 font-normal text-xs">({grade.letter})</span></span>
+                          </div>
+                          <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
+                            <div className={`h-full rounded-full ${grade.bar} transition-all`} style={{ width: `${val}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               <div className="mt-5 rounded-2xl border border-white/20 bg-white/5 p-5">
                 <p className="text-xs uppercase tracking-wider text-white/70">Feedback Paragraph</p>

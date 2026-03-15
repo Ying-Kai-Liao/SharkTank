@@ -173,7 +173,7 @@ export default function Page() {
   const rejectedOfferCount = offerJudgeIds.filter((judgeId) => offerDecisions[judgeId] === "rejected").length;
   const allOffersRejected = offerJudgeIds.length > 0 && rejectedOfferCount === offerJudgeIds.length;
   const displayScore = averageEvaluationScore(roundState.evaluation);
-  const roundResult = roundState.evaluation || null;
+  const roundResult = roundState.roundResult || null;
 
   const speakerName =
     phase === "offer-dialogue" && activeOfferSpeakerId ? JUDGE_NAMES[activeOfferSpeakerId] || "Judge"
@@ -505,7 +505,8 @@ export default function Page() {
 
     hasNavigatedFeedbackRef.current = true;
 
-    const score = averageEvaluationScore(roundStateRef.current.evaluation);
+    const evaluation = roundStateRef.current.evaluation || {};
+    const score = averageEvaluationScore(evaluation);
     const scoreTier = score >= 80 ? "good" : score >= 62 ? "medium" : "bad";
     const decisionType = acceptedOfferJudgeId ? "accept" : "disaccept";
 
@@ -517,6 +518,10 @@ export default function Page() {
 
     if (acceptedOfferJudgeId) {
       query.set("acceptedJudgeId", acceptedOfferJudgeId);
+    }
+
+    if (evaluation.clarity !== undefined) {
+      query.set("eval", JSON.stringify(evaluation));
     }
 
     startTransition(() => {
@@ -661,6 +666,10 @@ export default function Page() {
   }
 
   function handleAcceptOffer(judgeId) {
+    if (roundStateRef.current.currentState !== ROUND_STATES.DEALS) {
+      return;
+    }
+
     const offer = offersByJudge[judgeId];
     if (!offer) {
       return;
