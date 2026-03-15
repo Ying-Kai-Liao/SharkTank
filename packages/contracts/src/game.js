@@ -6,8 +6,7 @@ export const ROUND_STATES = Object.freeze({
   FOLLOW_UP: "FOLLOW_UP",
   PANEL: "PANEL",
   DEALS: "DEALS",
-  PLAYER_DECISION: "PLAYER_DECISION",
-  ROUND_RESULT: "ROUND_RESULT"
+  DEBRIEF: "DEBRIEF"
 });
 
 export const PLAYER_ACTIONS = Object.freeze({
@@ -19,7 +18,6 @@ export const PLAYER_ACTIONS = Object.freeze({
   ACCEPT_DEAL: "accept_deal",
   REJECT_DEAL: "reject_deal",
   ADVANCE: "advance_when_timer_expires",
-  SUBMIT_BARGAIN: "submit_bargain",
   DECLINE_QUESTION: "decline_question"
 });
 
@@ -343,4 +341,65 @@ export function isPanelStateShape(value) {
       typeof value.awaitingAnswer === "boolean" &&
       typeof value.closed === "boolean"
   );
+}
+
+function isJudgeDebriefEntryShape(value) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  if (!hasText(value.judgeId) || !hasText(value.judgeName)) {
+    return false;
+  }
+
+  if (!isFiniteNumber(value.weightedScore) || value.weightedScore < 0) {
+    return false;
+  }
+
+  if (!value.evaluation || typeof value.evaluation !== "object") {
+    return false;
+  }
+
+  for (const dimension of EVALUATION_DIMENSIONS) {
+    if (!isFiniteNumber(value.evaluation[dimension])) {
+      return false;
+    }
+  }
+
+  if (!hasText(value.topDimension)) {
+    return false;
+  }
+
+  if (!hasText(value.focusText)) {
+    return false;
+  }
+
+  if (value.narrative !== null && value.narrative !== undefined) {
+    if (typeof value.narrative !== "object") {
+      return false;
+    }
+
+    if (!hasText(value.narrative.journeyNarrative) || !hasText(value.narrative.keyMoment) || !hasText(value.narrative.improvementHint)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+export function isDebriefPayloadShape(value) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      Array.isArray(value.judges) &&
+      value.judges.length > 0 &&
+      value.judges.every(isJudgeDebriefEntryShape) &&
+      hasText(value.topDimension)
+  );
+}
+
+export function validateDebriefPayload(value) {
+  if (!isDebriefPayloadShape(value)) {
+    throw new Error("Debrief payload must include a non-empty judges array with valid entries and a top dimension.");
+  }
 }

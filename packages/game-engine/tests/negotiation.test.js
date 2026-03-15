@@ -4,10 +4,7 @@ import assert from "node:assert/strict";
 import { validateJudgeBundle } from "../../contracts/src/index.js";
 import {
   applyAction,
-  clampBargainTerms,
   createInitialGameState,
-  createRevisedOffer,
-  getAllowedActions,
   InvalidActionError,
   JUDGE_PROFILES,
   PLAYER_ACTIONS,
@@ -59,7 +56,7 @@ function submitPitchUpdate(state, { sequence, text, receivedAtMs }) {
   });
 }
 
-function advanceToFollowUp(options = {}) {
+function advanceToFollowUp() {
   let state = createInitialGameState({ pitchDurationSeconds: 12 });
   state = startPitch(state, 1_000, 12);
   state = submitPitchUpdate(state, {
@@ -85,8 +82,8 @@ function advanceToFollowUp(options = {}) {
   return state;
 }
 
-function advanceToPlayerDecision(options = {}) {
-  let state = advanceToFollowUp(options);
+function advanceToDeals() {
+  let state = advanceToFollowUp();
   state = applyAction(state, {
     type: PLAYER_ACTIONS.SUBMIT_ANSWER,
     payload: {
@@ -95,35 +92,30 @@ function advanceToPlayerDecision(options = {}) {
   });
   assert.equal(state.currentState, ROUND_STATES.DEALS);
   assert.ok(state.offers.length >= 1);
-  state = applyAction(state, { type: PLAYER_ACTIONS.ADVANCE });
-  assert.equal(state.currentState, ROUND_STATES.PLAYER_DECISION);
   return state;
 }
 
-test("bargain on an active offer clamps terms and creates revised offer", () => {
-  let state = advanceToPlayerDecision();
-  const originalOffer = state.offers[0];
-  const proposedAmount = originalOffer.amount + 100_000;
-  const proposedEquity = originalOffer.equity - 20;
+test("accept deal transitions from DEALS directly to DEBRIEF", () => {
+  let state = advanceToDeals();
 
   state = applyAction(state, {
-    type: PLAYER_ACTIONS.SUBMIT_BARGAIN,
-    payload: {
-      offerId: originalOffer.id,
-      terms: { amount: proposedAmount, equity: proposedEquity }
-    }
+    type: PLAYER_ACTIONS.ACCEPT_DEAL,
+    payload: { dealId: state.offers[0].id }
   });
 
-  const revisedOffer = state.offers[0];
-  assert.equal(revisedOffer.revised, true);
-  assert.equal(revisedOffer.originalOfferId, originalOffer.id);
-  assert.equal(revisedOffer.id, `${originalOffer.id}-revised`);
+  assert.equal(state.currentState, ROUND_STATES.DEBRIEF);
+  assert.match(state.roundResult.headline, /Deal accepted/);
+});
 
-  const maxAmount = Math.round(originalOffer.amount * 1.20);
-  const minEquity = Math.max(1, originalOffer.equity - 5);
-  assert.ok(revisedOffer.amount <= maxAmount);
-  assert.ok(revisedOffer.equity >= minEquity);
-  assert.equal(state.currentState, ROUND_STATES.PLAYER_DECISION);
+test("reject deal transitions from DEALS directly to DEBRIEF", () => {
+  let state = advanceToDeals();
+
+  state = applyAction(state, {
+    type: PLAYER_ACTIONS.REJECT_DEAL
+  });
+
+  assert.equal(state.currentState, ROUND_STATES.DEBRIEF);
+  assert.ok(state.roundResult);
 });
 
 test("decline-to-answer in follow-up advances to deals when evaluation warrants offers", () => {
@@ -138,7 +130,7 @@ test("decline-to-answer in follow-up advances to deals when evaluation warrants 
   assert.ok(state.transcript.some((t) => t.text.includes("declined to answer")));
 });
 
-test("decline-to-answer in follow-up advances to round result when no offers generated", () => {
+test("decline-to-answer always transitions to DEALS", () => {
   let state = createInitialGameState({ pitchDurationSeconds: 12 });
   state = startPitch(state, 1_000, 12);
   state = submitPitchUpdate(state, {
@@ -162,29 +154,11 @@ test("decline-to-answer in follow-up advances to round result when no offers gen
     type: PLAYER_ACTIONS.DECLINE_QUESTION
   });
 
-  // With a weak pitch, either we get DEALS (if some offers still pass) or ROUND_RESULT
-  assert.ok(
-    state.currentState === ROUND_STATES.DEALS || state.currentState === ROUND_STATES.ROUND_RESULT,
-    `Expected DEALS or ROUND_RESULT, got ${state.currentState}`
-  );
-});
-
-test("cannot bargain when no offers exist", () => {
-  let state = advanceToFollowUp();
-
-  assert.throws(() => {
-    applyAction(state, {
-      type: PLAYER_ACTIONS.SUBMIT_BARGAIN,
-      payload: {
-        offerId: "nonexistent-offer",
-        terms: { amount: 50000, equity: 15 }
-      }
-    });
-  }, InvalidActionError);
+  assert.equal(state.currentState, ROUND_STATES.DEALS);
 });
 
 test("cannot decline-question outside of follow-up", () => {
-  let state = advanceToPlayerDecision();
+  let state = advanceToDeals();
 
   assert.throws(() => {
     applyAction(state, {
@@ -194,119 +168,36 @@ test("cannot decline-question outside of follow-up", () => {
 });
 
 test("founder actions are tracked in state", () => {
-  let state = advanceToPlayerDecision();
-  assert.ok(Array.isArray(state.founderActions));
-
-  const originalOffer = state.offers[0];
-  state = applyAction(state, {
-    type: PLAYER_ACTIONS.SUBMIT_BARGAIN,
-    payload: {
-      offerId: originalOffer.id,
-      terms: { amount: originalOffer.amount + 5000, equity: originalOffer.equity - 2 }
-    }
-  });
-
-  assert.equal(state.founderActions.length, 1);
-  assert.equal(state.founderActions[0].type, "bargain");
-  assert.equal(state.founderActions[0].offerId, originalOffer.id);
-});
-
-test("bargain in player-decision replaces offer with revised terms", () => {
-  let state = advanceToPlayerDecision();
-  const originalOffer = state.offers[0];
-  const originalCount = state.offers.length;
-
-  state = applyAction(state, {
-    type: PLAYER_ACTIONS.SUBMIT_BARGAIN,
-    payload: {
-      offerId: originalOffer.id,
-      terms: { amount: originalOffer.amount + 5000, equity: originalOffer.equity - 1 }
-    }
-  });
-
-  assert.equal(state.offers.length, originalCount);
-  const revised = state.offers[0];
-  assert.equal(revised.revised, true);
-  assert.equal(revised.originalOfferId, originalOffer.id);
-  assert.notEqual(revised.id, originalOffer.id);
-});
-
-// --- Fixture: One-offer path ---
-test("fixture: single judge offer, founder bargains, then accepts", () => {
-  let state = advanceToPlayerDecision();
-  const offer = state.offers[0];
-
-  state = applyAction(state, {
-    type: PLAYER_ACTIONS.SUBMIT_BARGAIN,
-    payload: {
-      offerId: offer.id,
-      terms: { amount: offer.amount + 3000, equity: offer.equity - 2 }
-    }
-  });
-
-  const revisedOffer = state.offers[0];
-  assert.equal(revisedOffer.revised, true);
-
-  state = applyAction(state, {
-    type: PLAYER_ACTIONS.ACCEPT_DEAL,
-    payload: { dealId: revisedOffer.id }
-  });
-
-  assert.equal(state.currentState, ROUND_STATES.ROUND_RESULT);
-  assert.match(state.roundResult.headline, /Deal accepted/);
-});
-
-// --- Fixture: Multi-offer path ---
-test("fixture: multiple offers, founder bargains on one, accepts another", () => {
-  let state = advanceToPlayerDecision();
-
-  if (state.offers.length < 2) {
-    // Skip if only one offer generated deterministically
-    return;
-  }
-
-  const firstOffer = state.offers[0];
-  const secondOffer = state.offers[1];
-
-  state = applyAction(state, {
-    type: PLAYER_ACTIONS.SUBMIT_BARGAIN,
-    payload: {
-      offerId: firstOffer.id,
-      terms: { amount: firstOffer.amount + 2000, equity: firstOffer.equity - 1 }
-    }
-  });
-
-  assert.equal(state.offers[0].revised, true);
-  assert.equal(state.offers[1].id, secondOffer.id);
-
-  state = applyAction(state, {
-    type: PLAYER_ACTIONS.ACCEPT_DEAL,
-    payload: { dealId: secondOffer.id }
-  });
-
-  assert.equal(state.currentState, ROUND_STATES.ROUND_RESULT);
-  assert.match(state.roundResult.headline, /Deal accepted/);
-});
-
-// --- Fixture: No-continuation path ---
-test("fixture: founder declines question, no continuation, round closes", () => {
   let state = advanceToFollowUp();
 
   state = applyAction(state, {
     type: PLAYER_ACTIONS.DECLINE_QUESTION
   });
 
+  assert.ok(Array.isArray(state.founderActions));
+  assert.equal(state.founderActions.length, 1);
+  assert.equal(state.founderActions[0].type, "decline");
+});
+
+test("fixture: founder declines question, then accepts or round closes", () => {
+  let state = advanceToFollowUp();
+
+  state = applyAction(state, {
+    type: PLAYER_ACTIONS.DECLINE_QUESTION
+  });
+
+  assert.equal(state.currentState, ROUND_STATES.DEALS);
   assert.ok(state.founderActions.length >= 1);
   assert.equal(state.founderActions.at(-1).type, "decline");
 
-  if (state.currentState === ROUND_STATES.DEALS) {
-    state = applyAction(state, { type: PLAYER_ACTIONS.ADVANCE });
-    assert.equal(state.currentState, ROUND_STATES.PLAYER_DECISION);
-
-    state = applyAction(state, { type: PLAYER_ACTIONS.REJECT_DEAL });
-    assert.equal(state.currentState, ROUND_STATES.ROUND_RESULT);
+  if (state.offers.length) {
+    state = applyAction(state, {
+      type: PLAYER_ACTIONS.REJECT_DEAL
+    });
+    assert.equal(state.currentState, ROUND_STATES.DEBRIEF);
   } else {
-    assert.equal(state.currentState, ROUND_STATES.ROUND_RESULT);
+    state = applyAction(state, { type: PLAYER_ACTIONS.ADVANCE });
+    assert.equal(state.currentState, ROUND_STATES.DEBRIEF);
   }
 
   assert.ok(state.roundResult);

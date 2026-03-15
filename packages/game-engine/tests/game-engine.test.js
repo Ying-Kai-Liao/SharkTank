@@ -195,13 +195,10 @@ test("a full local round still completes from timed pitch capture to deal accept
   assert.equal(state.currentState, ROUND_STATES.DEALS);
   assert.ok(state.offers.length >= 1);
 
-  state = applyAction(state, { type: PLAYER_ACTIONS.ADVANCE });
-  assert.equal(state.currentState, ROUND_STATES.PLAYER_DECISION);
-
   state = applyAction(state, {
     type: PLAYER_ACTIONS.ACCEPT_DEAL,
     payload: { dealId: state.offers[0].id }
   });
-  assert.equal(state.currentState, ROUND_STATES.ROUND_RESULT);
+  assert.equal(state.currentState, ROUND_STATES.DEBRIEF);
   assert.match(state.roundResult.headline, /Deal accepted/);
 });
