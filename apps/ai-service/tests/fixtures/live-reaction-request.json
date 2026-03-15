@@ -1,0 +1,45 @@
+{
+  "roundId": "local-round",
+  "generatedAtMs": 12000,
+  "presentationOnly": true,
+  "preferredSource": "provider",
+  "judges": [
+    {
+      "id": "cat",
+      "name": "Zephyr Valtos"
+    },
+    {
+      "id": "dog",
+      "name": "Ryo Barkman"
+    },
+    {
+      "id": "shark",
+      "name": "Mara Finley"
+    }
+  ],
+  "transcriptUpdates": [
+    {
+      "eventId": "pitch-0",
+      "sequence": 0,
+      "text": "We built a retention engine for neighborhood retailers.",
+      "receivedAtMs": 1000,
+      "sourceType": "mock"
+    },
+    {
+      "eventId": "pitch-1",
+      "sequence": 1,
+      "text": "Our pilots lifted repeat purchases by 18 percent and raised margin on every refill.",
+      "receivedAtMs": 4200,
+      "sourceType": "mock"
+    },
+    {
+      "eventId": "pitch-2",
+      "sequence": 2,
+      "text": "The team shipped the merchant dashboard in six weeks and already has signed demand.",
+      "receivedAtMs": 8600,
+      "sourceType": "mock"
+    }
+  ],
+  "lastReactionAtMs": 7000,
+  "lastTranscriptSequence": 1
+}

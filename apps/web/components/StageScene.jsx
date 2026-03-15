@@ -55,6 +55,8 @@ const sideClassMap = {
 export default function StageScene({
   activeSpeakerId,
   judgeReactions,
+  liveJudgePresence,
+  livePresenceEnabled,
   offersByJudge,
   offerDecisions,
   offerSelectionEnabled,
@@ -89,6 +91,13 @@ export default function StageScene({
 
   const focusedJudgeId = offerSelectionEnabled ? hoveredJudgeId : activeSpeakerId;
 
+  function formatPresenceLabel(value) {
+    return value
+      .split("_")
+      .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+      .join(" ");
+  }
+
   function formatOffer(offer) {
     if (!offer) {
       return "No offer";
@@ -97,8 +106,42 @@ export default function StageScene({
     return `$${Number(offer.amount || 0).toLocaleString()} for ${Number(offer.equity || 0)}%`;
   }
 
+  function resolvePresenceMotion(presence) {
+    if (!presence) {
+      return "";
+    }
+
+    switch (presence.animationCue) {
+      case "lean_in":
+        return "translate-y-[-6px] scale-[1.02]";
+      case "nod":
+        return "translate-y-[-4px]";
+      case "smile":
+        return "translate-y-[-6px] drop-shadow-[0_18px_28px_rgba(240,204,98,0.3)]";
+      case "frown":
+        return "translate-y-[2px]";
+      case "tilt_head":
+        return "translate-y-[1px] rotate-[-1deg]";
+      default:
+        return "";
+    }
+  }
+
   function resolveSprite(character) {
+    const pitchPresence = livePresenceEnabled ? liveJudgePresence?.[character.id] : null;
     const reaction = judgeReactions?.[character.id];
+
+    if (pitchPresence && !activeSpeakerId) {
+      if (pitchPresence.mood === "positive") {
+        return character.sittingPositiveSrc;
+      }
+
+      if (pitchPresence.mood === "negative") {
+        return character.sittingNegativeSrc;
+      }
+
+      return character.sittingSrc;
+    }
 
     if (character.id === activeSpeakerId) {
       if (reaction === "positive" && character.talkingPositiveSrc) {
@@ -147,10 +190,23 @@ export default function StageScene({
               }
             }}
           >
+            {livePresenceEnabled && liveJudgePresence?.[character.id] && (
+              <div className="absolute -top-14 left-1/2 z-20 min-w-[170px] -translate-x-1/2 rounded-2xl border border-white/25 bg-black/74 px-3 py-2 text-center shadow-dialogue backdrop-blur">
+                <p className="text-[10px] uppercase tracking-[0.24em] text-white/55">
+                  {liveJudgePresence[character.id].mood}
+                </p>
+                <p className="mt-1 text-xs font-semibold text-white">
+                  {formatPresenceLabel(liveJudgePresence[character.id].presenceState)}
+                </p>
+                <p className="mt-1 text-[11px] text-white/75">
+                  {liveJudgePresence[character.id].confidenceBand} confidence
+                </p>
+              </div>
+            )}
             <img
               src={resolveSprite(character)}
               alt={character.name}
-              className={`pixel-crisp w-auto max-w-[320px] drop-shadow-[0_15px_24px_rgba(0,0,0,0.72)] md:max-w-[420px] ${character.heightClass} ${character.id === "cat" ? "-scale-x-100" : ""} ${focusedJudgeId && character.id !== focusedJudgeId ? "opacity-15 saturate-0 brightness-40" : "opacity-100"}`}
+              className={`pixel-crisp w-auto max-w-[320px] drop-shadow-[0_15px_24px_rgba(0,0,0,0.72)] transition-transform duration-300 md:max-w-[420px] ${character.heightClass} ${character.id === "cat" ? "-scale-x-100" : ""} ${resolvePresenceMotion(liveJudgePresence?.[character.id])} ${focusedJudgeId && character.id !== focusedJudgeId ? "opacity-15 saturate-0 brightness-40" : "opacity-100"}`}
             />
 
             {offerSelectionEnabled && (
