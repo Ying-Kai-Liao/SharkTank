@@ -247,8 +247,20 @@ function finalizePitch(state, action) {
   }
 
   const closedAtMs = closeReason === PITCH_CLOSE_REASONS.TIMER_EXPIRED ? pitchTimer.closesAtMs : nowMs;
+  const transcriptUpdates = state.pitchCapture.transcriptUpdates.length
+    ? state.pitchCapture.transcriptUpdates
+    : [
+      {
+        eventId: "fallback-0",
+        sequence: 0,
+        text: "Founder provided a brief opening statement.",
+        receivedAtMs: closedAtMs,
+        sourceType: state.pitchCapture.sourceType ?? PITCH_SOURCE_TYPES.MOCK
+      }
+    ];
+
   const finalizedPitch = createFinalizedPitch({
-    updates: state.pitchCapture.transcriptUpdates,
+    updates: transcriptUpdates,
     durationSeconds: state.pitchCapture.durationSeconds,
     startedAtMs: state.pitchCapture.startedAtMs,
     closedAtMs,
