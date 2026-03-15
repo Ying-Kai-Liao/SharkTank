@@ -133,6 +133,7 @@ export default function Page() {
   const hasNavigatedFeedbackRef = useRef(false);
   const audioContextRef = useRef(null);
   const lobbyTypingAudioRef = useRef(null);
+  const judgeSpeechRecognitionRef = useRef(null);
   const ambienceOscRef = useRef(null);
   const ambienceGainRef = useRef(null);
   const currentAmbienceModeRef = useRef(null);
@@ -167,6 +168,7 @@ export default function Page() {
   const [countdownValue, setCountdownValue] = useState(null);
   const [pendingPitchSourceType, setPendingPitchSourceType] = useState(null);
   const [liveMicError, setLiveMicError] = useState("");
+  const [judgeMicListening, setJudgeMicListening] = useState(false);
 
   const activeOfferLine = OFFER_CONVERSATION[offerLineIndex] || null;
   const pitchTimer = getPitchTimerSnapshot(roundState, nowMs);
@@ -752,6 +754,82 @@ export default function Page() {
     advancePanelTurn();
   }
 
+  function stopJudgeMicCapture() {
+    const recognition = judgeSpeechRecognitionRef.current;
+    if (!recognition) {
+      return;
+    }
+
+    try {
+      recognition.stop();
+    } catch {
+      // Ignore stop errors when recognition is already inactive.
+    }
+  }
+
+  function handleTriggerJudgeMic() {
+    if (phase !== "judging" || !chatEnabled) {
+      return;
+    }
+
+    if (judgeMicListening) {
+      stopJudgeMicCapture();
+      return;
+    }
+
+    const RecognitionCtor =
+      typeof window !== "undefined"
+        ? window.SpeechRecognition || window.webkitSpeechRecognition
+        : null;
+
+    if (!RecognitionCtor) {
+      setLiveMicError("Speech microphone is not supported in this browser.");
+      return;
+    }
+
+    if (!judgeSpeechRecognitionRef.current) {
+      const recognition = new RecognitionCtor();
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+
+      recognition.onresult = (event) => {
+        let transcript = "";
+        for (let index = event.resultIndex; index < event.results.length; index += 1) {
+          transcript += event.results[index][0].transcript;
+        }
+        onJudgeMicTranscript(transcript.trim());
+      };
+
+      recognition.onend = () => {
+        setJudgeMicListening(false);
+      };
+
+      recognition.onerror = () => {
+        setJudgeMicListening(false);
+      };
+
+      judgeSpeechRecognitionRef.current = recognition;
+    }
+
+    try {
+      setLiveMicError("");
+      judgeSpeechRecognitionRef.current.start();
+      setJudgeMicListening(true);
+    } catch {
+      setJudgeMicListening(false);
+      setLiveMicError("Unable to start speech microphone. Try pressing Enter again.");
+    }
+  }
+
+  function onJudgeMicTranscript(transcript) {
+    if (!transcript) {
+      return;
+    }
+
+    setChatInput(transcript);
+  }
+
   function handleChatInputChange(value) {
     setChatInput(value);
     const isTyping = phase === "judging" && chatEnabled && value.trim().length > 0;
@@ -788,6 +866,15 @@ export default function Page() {
     window.addEventListener("keydown", handleIntroEnter);
     return () => window.removeEventListener("keydown", handleIntroEnter);
   }, [phase, pitchSourceType]);
+
+  useEffect(() => {
+    if (phase === "judging" && chatEnabled) {
+      return;
+    }
+
+    stopJudgeMicCapture();
+    setJudgeMicListening(false);
+  }, [phase, chatEnabled]);
 
   useEffect(() => {
     if (phase !== "countdown" || countdownValue === null) {
@@ -1023,6 +1110,7 @@ export default function Page() {
       stopCapture("unmount");
       stopAmbience();
       setLobbyTypingAudioPlaying(false);
+      stopJudgeMicCapture();
       if (audioContextRef.current && audioContextRef.current.state !== "closed") {
         audioContextRef.current.close().catch(() => {
           // Ignore close errors during teardown.
@@ -1050,12 +1138,13 @@ export default function Page() {
         inputValue={chatInput}
         onInputChange={handleChatInputChange}
         onSend={handleSendMessage}
+        onMicTrigger={handleTriggerJudgeMic}
         onAdvance={handleAdvanceDialogue}
         showAdvance={showAdvance}
         statusText={statusText}
         micActive={
           (phase === "pitch" && roundState.pitchCapture.sourceType === PITCH_SOURCE_TYPES.LIVE_STT) ||
-          (phase === "judging" && chatEnabled && chatInput.trim().length > 0)
+          (phase === "judging" && (judgeMicListening || (chatEnabled && chatInput.trim().length > 0)))
         }
       />
 

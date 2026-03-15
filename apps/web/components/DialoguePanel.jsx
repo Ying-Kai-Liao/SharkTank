@@ -16,6 +16,7 @@ export default function DialoguePanel({
   inputValue,
   onInputChange,
   onSend,
+  onMicTrigger,
   onAdvance,
   showAdvance,
   statusText,
@@ -26,6 +27,9 @@ export default function DialoguePanel({
   function handleSubmit(event) {
     event.preventDefault();
     if (sendDisabled) {
+      if (chatEnabled && typeof onMicTrigger === "function") {
+        onMicTrigger();
+      }
       return;
     }
     onSend();
@@ -50,7 +54,7 @@ export default function DialoguePanel({
               {micActive
                 ? "Live microphone active"
                 : chatEnabled
-                  ? "Press Enter or click Send"
+                  ? "Press Enter to start microphone, or type and press Enter to send"
                   : "Read all judge dialogue first"}
             </span>
           </div>
