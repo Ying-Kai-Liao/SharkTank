@@ -70,6 +70,12 @@ const characters = [
   }
 ];
 
+const STAGE_TO_JUDGE = {
+  cat: "rhea",
+  dog: "marco",
+  shark: "tori"
+};
+
 const sideClassMap = {
   left: "justify-self-end pr-20 md:pr-6",
   center: "justify-self-center",
@@ -94,9 +100,7 @@ export default function StageScene({
   onSend,
   onAdvance,
   showAdvance,
-  statusText,
-  micActive = false,
-  typewriterEnabled = false
+  statusText
 }) {
   const [hoveredJudgeId, setHoveredJudgeId] = useState(null);
   const [frameIndex, setFrameIndex] = useState(0);
@@ -342,8 +346,6 @@ export default function StageScene({
           onAdvance={onAdvance}
           showAdvance={showAdvance}
           statusText={statusText}
-          micActive={micActive}
-          typewriterEnabled={typewriterEnabled}
         />
       )}
     </section>

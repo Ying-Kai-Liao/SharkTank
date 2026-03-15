@@ -154,12 +154,17 @@ export default function Page() {
   const [debriefData, setDebriefData] = useState(null);
   const [debriefLoading, setDebriefLoading] = useState(false);
   const debriefFetchedRef = useRef(false);
+  const [judgeDeliberating, setJudgeDeliberating] = useState(false);
+  const [offerDialogueLines, setOfferDialogueLines] = useState([]);
+  const [offerDialogueLoading, setOfferDialogueLoading] = useState(false);
   const [countdownValue, setCountdownValue] = useState(null);
   const [pendingPitchSourceType, setPendingPitchSourceType] = useState(null);
   const [liveMicError, setLiveMicError] = useState("");
   const [judgeMicListening, setJudgeMicListening] = useState(false);
 
-  const activeOfferLine = OFFER_CONVERSATION[offerLineIndex] || null;
+  const activeOfferLine = offerDialogueLines.length
+    ? offerDialogueLines[offerLineIndex] || null
+    : OFFER_CONVERSATION[offerLineIndex] || null;
   const pitchTimer = getPitchTimerSnapshot(roundState, nowMs);
   const pitchTranscriptText = joinTranscriptUpdates(roundState.pitchCapture.transcriptUpdates);
   const offersByJudge = Object.fromEntries(
@@ -228,7 +233,7 @@ export default function Page() {
       : phase === "pitch-closed"
         ? `Closed: ${roundState.pitchCapture.closeReason || PITCH_CLOSE_REASONS.MANUAL}`
         : phase === "offer-dialogue" && activeOfferLine
-          ? `Offer conversation ${offerLineIndex + 1}/${OFFER_CONVERSATION.length}`
+          ? `Offer conversation ${offerLineIndex + 1}/${offerDialogueLines.length || OFFER_CONVERSATION.length}`
           : phase === "offer-select" && acceptedOfferJudgeId
             ? "Deal locked. You can still hover judges to inspect the cards."
             : phase === "offer-select"
@@ -643,6 +648,10 @@ export default function Page() {
         return;
       }
 
+      const lines = offerDialogueLines.length ? offerDialogueLines : OFFER_CONVERSATION;
+
+      if (offerLineIndex < lines.length - 1) {
+        setOfferLineIndex((current) => current + 1);
       const nextOfferIndex = findNextUniqueOfferLine(offerLineIndex, OFFER_CONVERSATION);
 
       if (nextOfferIndex < OFFER_CONVERSATION.length) {
@@ -671,17 +680,59 @@ export default function Page() {
 
       if (!nextState.offers.length) {
         commitRoundAction({ type: PLAYER_ACTIONS.ADVANCE });
-      } else if (OFFER_CONVERSATION.length) {
-        setOfferLineIndex(0);
-        setPhase("offer-dialogue");
       } else {
-        setPhase("offer-select");
+        fetchOfferDialogue(nextState);
       }
       return;
     }
 
     if (nextState.panel?.awaitingAnswer) {
       setChatEnabled(true);
+    }
+  }
+
+  async function fetchOfferDialogue(dealsState) {
+    setOfferDialogueLoading(true);
+    setOfferDialogueLines([]);
+
+    try {
+      const response = await fetch("/api/judge-offer-dialogue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          evaluation: dealsState.evaluation,
+          offers: dealsState.offers,
+          judgeResponses: dealsState.judgeResponses,
+          transcript: dealsState.transcript
+        })
+      });
+
+      if (response.ok) {
+        const payload = await response.json();
+        if (payload?.dialogue?.length) {
+          const lines = payload.dialogue.map((entry) => ({
+            speakerId: entry.stageId,
+            text: entry.text
+          }));
+          setOfferDialogueLines(lines);
+          setOfferLineIndex(0);
+          setOfferDialogueLoading(false);
+          setPhase("offer-dialogue");
+          return;
+        }
+      }
+    } catch {
+      // Fall back to static conversation or skip
+    }
+
+    setOfferDialogueLoading(false);
+
+    if (OFFER_CONVERSATION.length) {
+      setOfferDialogueLines([]);
+      setOfferLineIndex(0);
+      setPhase("offer-dialogue");
+    } else {
+      setPhase("offer-select");
     }
   }
 
@@ -730,12 +781,7 @@ export default function Page() {
 
     if (nextState.currentState === ROUND_STATES.DEALS) {
       if (nextState.offers.length) {
-        if (OFFER_CONVERSATION.length) {
-          setOfferLineIndex(0);
-          setPhase("offer-dialogue");
-        } else {
-          setPhase("offer-select");
-        }
+        fetchOfferDialogue(nextState);
       } else {
         commitRoundAction({ type: PLAYER_ACTIONS.ADVANCE });
       }
@@ -754,29 +800,6 @@ export default function Page() {
     setChatEnabled(false);
     setLobbyTypingAudioPlaying(false);
 
-    try {
-      const panelTurnIndex = roundStateRef.current.panel?.turn || 0;
-      const response = await fetch("/api/judge-reactions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          groupIndex: panelTurnIndex,
-          playerMessage: trimmedMessage
-        })
-      });
-
-      if (response.ok) {
-        const payload = await response.json();
-        if (payload?.reactions && typeof payload.reactions === "object") {
-          setJudgeReactions(payload.reactions);
-        }
-      }
-    } catch {
-      // Keep current reaction sprites if mock API is unavailable.
-    }
-
     if (judgingFinished) {
       return;
     }
@@ -786,7 +809,47 @@ export default function Page() {
       payload: { answer: trimmedMessage }
     });
 
-    advancePanelTurn();
+    let replanQuestion = null;
+
+    try {
+      const currentState = roundStateRef.current;
+      const response = await fetch("/api/judge-reactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "replan",
+          pitch: currentState.pitch,
+          evaluation: currentState.evaluation,
+          transcript: currentState.transcript,
+          turnNumber: currentState.panel?.turn || 0,
+          founderActions: currentState.founderActions || []
+        })
+      });
+
+      if (response.ok) {
+        const payload = await response.json();
+
+        if (payload?.turnIntents?.length) {
+          const reactions = {};
+          for (const intent of payload.turnIntents) {
+            const stageId = JUDGE_TO_STAGE[intent.judgeId];
+            if (stageId && intent.status) {
+              reactions[stageId] = intent.status === "offering" || intent.status === "supportive" ? "positive" : intent.status === "dropped_out" ? "negative" : "positive";
+            }
+            if (intent.intent === "ask" && intent.dialogue && !replanQuestion) {
+              replanQuestion = intent.dialogue;
+            }
+          }
+          if (Object.keys(reactions).length) {
+            setJudgeReactions(reactions);
+          }
+        }
+      }
+    } catch {
+      // Fall back to advancing without AI question
+    }
+
+    advancePanelTurn(replanQuestion);
   }
 
   function stopJudgeMicCapture() {
@@ -1045,17 +1108,59 @@ export default function Page() {
       return;
     }
 
-    const timeoutId = setTimeout(() => {
+    let cancelled = false;
+
+    async function fetchAIJudgeBundle() {
+      setJudgeDeliberating(true);
+
+      let bundle = null;
+
+      try {
+        const response = await fetch("/api/judge-reactions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: "initial",
+            pitch: roundStateRef.current.pitch,
+            evaluation: roundStateRef.current.evaluation,
+            transcript: roundStateRef.current.transcript
+          })
+        });
+
+        if (response.ok) {
+          const payload = await response.json();
+          if (payload?.bundle?.judgeResponses?.length) {
+            bundle = payload.bundle;
+          }
+        }
+      } catch {
+        // Fall back to heuristic bundle
+      }
+
+      if (cancelled) {
+        return;
+      }
+
+      if (!bundle) {
+        bundle = createJudgeBundle(roundStateRef.current.evaluation);
+      }
+
+      setJudgeDeliberating(false);
       initializeJudgingFlow();
       commitRoundAction({
         type: PLAYER_ACTIONS.ADVANCE,
-        payload: createJudgeBundle(roundState.evaluation)
+        payload: bundle
       });
       setPhase("judging");
       advancePanelTurn();
-    }, 900);
+    }
 
-    return () => clearTimeout(timeoutId);
+    const timeoutId = setTimeout(fetchAIJudgeBundle, 500);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
   }, [phase, roundState.currentState, roundState.evaluation]);
 
   useEffect(() => {
@@ -1136,6 +1241,7 @@ export default function Page() {
         onAdvance={handleAdvanceDialogue}
         showAdvance={showAdvance}
         statusText={statusText}
+        judgeInsights={phase === "judging" ? roundState.judgeResponses : []}
         typewriterEnabled={judgeDialogueTypingEnabled}
         micActive={
           (phase === "pitch" && roundState.pitchCapture.sourceType === PITCH_SOURCE_TYPES.LIVE_STT) ||
@@ -1261,12 +1367,21 @@ export default function Page() {
       {phase === "pitch-closed" && (
         <section className="absolute inset-0 z-40 flex items-center justify-center bg-black/58 p-4">
           <div className="w-full max-w-2xl rounded-3xl border border-white/20 bg-black/78 p-6 backdrop-blur md:p-8">
-            <p className="font-display text-2xl text-white md:text-4xl">Pitch Captured</p>
-            <p className="mt-3 text-sm text-white/90 md:text-base">
-              {roundState.pitchCapture.finalizedPitch?.text}
+            <p className="font-display text-2xl text-white md:text-4xl">
+              {judgeDeliberating ? "Judges are deliberating..." : "Pitch Captured"}
             </p>
+            {!judgeDeliberating && (
+              <p className="mt-3 text-sm text-white/90 md:text-base">
+                {roundState.pitchCapture.finalizedPitch?.text}
+              </p>
+            )}
+            {judgeDeliberating && (
+              <p className="mt-3 text-sm text-white/70 md:text-base">
+                The judges are reviewing your pitch and forming their initial reactions...
+              </p>
+            )}
             <p className="mt-4 text-xs uppercase tracking-wide text-white/65 md:text-sm">
-              Closing reason: {roundState.pitchCapture.closeReason}
+              {judgeDeliberating ? "Waiting for AI response" : `Closing reason: ${roundState.pitchCapture.closeReason}`}
             </p>
           </div>
         </section>

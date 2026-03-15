@@ -24,16 +24,11 @@ export default function DialoguePanel({
   onMicTrigger,
   onAdvance,
   showAdvance,
-  statusText,
-  micActive = false,
-  typewriterEnabled = false
+  statusText
 }) {
-  const sendDisabled = !chatEnabled || !inputValue.trim();
   const [visibleLength, setVisibleLength] = useState(typewriterEnabled ? 0 : text.length);
-
-  useEffect(() => {
+  typewriterEnabled = false,
     if (!typewriterEnabled) {
-      setVisibleLength(text.length);
       return;
     }
 
@@ -85,6 +80,18 @@ export default function DialoguePanel({
             {displayedText}
             {isTyping ? <span className="ml-0.5 inline-block h-[1em] w-2 animate-pulse rounded-full bg-white/80 align-middle" /> : null}
           </p>
+          {insightTags?.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {insightTags.map((tag) => (
+                <span
+                  key={tag}
+                  className="rounded-full border border-amber-400/30 bg-amber-500/10 px-2.5 py-0.5 text-[0.65rem] font-medium text-amber-200/90"
+                >
+                  {tag.replace(/_/g, " ")}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="mb-4 h-px w-full bg-white/20" />
