@@ -5,12 +5,13 @@ import {
   PITCH_CLOSE_REASONS,
   PITCH_SOURCE_TYPES,
   ROUND_STATES,
+  validateBargainPayload,
   validateJudgeBundle,
   validatePitchStart,
   validatePitchTranscriptUpdate
 } from "../../contracts/src/index.js";
 import { JUDGE_PROFILES } from "./judges.js";
-import { createRoundResult, generateOffers } from "./offers.js";
+import { clampBargainTerms, createRevisedOffer, createRoundResult, generateOffers } from "./offers.js";
 import { evaluateAnswer, evaluatePitch, mergeEvaluations } from "./scoring.js";
 
 export const DEFAULT_PITCH_DURATION_SECONDS = 45;
@@ -49,8 +50,13 @@ function cloneState(state, updates) {
     transcript: updates.transcript ?? [...state.transcript],
     judgeResponses: updates.judgeResponses ?? [...state.judgeResponses],
     offers: updates.offers ?? [...state.offers],
+    founderActions: updates.founderActions ?? [...state.founderActions],
     pitchCapture: updates.pitchCapture ?? clonePitchCapture(state.pitchCapture)
   };
+}
+
+function appendFounderAction(state, action) {
+  return [...state.founderActions, action];
 }
 
 function appendTranscript(state, speaker, text) {
@@ -90,6 +96,7 @@ export function createInitialGameState(options = {}) {
     acceptedDealId: null,
     roundResult: null,
     transcript: [],
+    founderActions: [],
     pitchCapture: createPitchCaptureState(pitchDurationSeconds)
   };
 }
@@ -123,11 +130,16 @@ export function getAllowedActions(state, options = {}) {
     case ROUND_STATES.JUDGE_REACTIONS:
     case ROUND_STATES.DEALS:
       return [PLAYER_ACTIONS.ADVANCE];
-    case ROUND_STATES.FOLLOW_UP:
-      return [PLAYER_ACTIONS.SUBMIT_ANSWER];
+    case ROUND_STATES.FOLLOW_UP: {
+      const followUpActions = [PLAYER_ACTIONS.SUBMIT_ANSWER, PLAYER_ACTIONS.DECLINE_QUESTION];
+      if (state.offers.length) {
+        followUpActions.push(PLAYER_ACTIONS.SUBMIT_BARGAIN);
+      }
+      return followUpActions;
+    }
     case ROUND_STATES.PLAYER_DECISION:
       return state.offers.length
-        ? [PLAYER_ACTIONS.ACCEPT_DEAL, PLAYER_ACTIONS.REJECT_DEAL]
+        ? [PLAYER_ACTIONS.ACCEPT_DEAL, PLAYER_ACTIONS.REJECT_DEAL, PLAYER_ACTIONS.SUBMIT_BARGAIN]
         : [PLAYER_ACTIONS.ADVANCE];
     default:
       return [];
@@ -248,6 +260,7 @@ export function applyAction(state, action) {
         acceptedDealId: null,
         roundResult: null,
         transcript: [],
+        founderActions: [],
         pitchCapture: {
           durationSeconds: startPayload.durationSeconds,
           sourceType: startPayload.sourceType,
@@ -357,6 +370,68 @@ export function applyAction(state, action) {
       }
 
       return resolveDealRejection(state);
+    }
+    case PLAYER_ACTIONS.SUBMIT_BARGAIN: {
+      if (state.currentState !== ROUND_STATES.FOLLOW_UP && state.currentState !== ROUND_STATES.PLAYER_DECISION) {
+        throw new InvalidActionError(`Cannot use "${action.type}" while round state is ${state.currentState}.`);
+      }
+
+      if (!state.offers.length) {
+        throw new InvalidActionError("Cannot bargain when no offers exist.");
+      }
+
+      validateBargainPayload(action.payload);
+
+      const targetOffer = state.offers.find((offer) => offer.id === action.payload.offerId);
+      if (!targetOffer) {
+        throw new InvalidActionError("The referenced offer does not exist.");
+      }
+
+      const clampedTerms = clampBargainTerms(targetOffer, action.payload.terms);
+      const revisedOffer = createRevisedOffer(targetOffer, clampedTerms);
+      const updatedOffers = state.offers.map((offer) =>
+        offer.id === targetOffer.id ? revisedOffer : offer
+      );
+
+      const founderAction = { type: "bargain", offerId: targetOffer.id, terms: clampedTerms };
+
+      return cloneState(state, {
+        offers: updatedOffers,
+        transcript: appendTranscript(
+          state,
+          "Founder",
+          `Founder proposes revised terms: $${clampedTerms.amount.toLocaleString()} for ${clampedTerms.equity}% equity.`
+        ),
+        founderActions: appendFounderAction(state, founderAction)
+      });
+    }
+    case PLAYER_ACTIONS.DECLINE_QUESTION: {
+      assertAction(state.currentState, ROUND_STATES.FOLLOW_UP, action.type);
+
+      const declineAction = { type: "decline" };
+      const offers = generateOffers(state.evaluation, JUDGE_PROFILES);
+
+      if (offers.length) {
+        return cloneState(state, {
+          currentState: ROUND_STATES.DEALS,
+          offers,
+          transcript: appendTranscript(state, "Founder", "Founder declined to answer the question."),
+          founderActions: appendFounderAction(state, declineAction)
+        });
+      }
+
+      const roundResult = createRoundResult({
+        evaluation: state.evaluation,
+        offers: [],
+        decision: { type: "no_offer" }
+      });
+
+      return cloneState(state, {
+        currentState: ROUND_STATES.ROUND_RESULT,
+        roundResult,
+        transcript: appendTranscript(state, "Founder", "Founder declined to answer. No offers were generated."),
+        founderActions: appendFounderAction(state, declineAction)
+      });
     }
     default:
       throw new InvalidActionError(`Unknown action "${action.type}".`);

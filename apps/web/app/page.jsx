@@ -7,6 +7,7 @@ import {
   createInitialGameState,
   createMockPitchTranscriptSource,
   createPitchCaptureAdapter,
+  getAllowedActions,
   getPitchTimerSnapshot,
   JUDGE_PROFILES,
   PLAYER_ACTIONS,
@@ -145,6 +146,10 @@ export default function Page() {
   const [acceptedOfferJudgeId, setAcceptedOfferJudgeId] = useState(null);
   const [roundResult, setRoundResult] = useState(null);
   const [liveReactionEvent, setLiveReactionEvent] = useState(null);
+  const [bargainMode, setBargainMode] = useState(false);
+  const [bargainOfferId, setBargainOfferId] = useState(null);
+  const [bargainAmount, setBargainAmount] = useState("");
+  const [bargainEquity, setBargainEquity] = useState("");
 
   const activeGroup = DIALOGUE_GROUPS[groupIndex] || null;
   const activeLine = activeGroup?.dialogues?.[lineIndex] || null;
@@ -153,6 +158,7 @@ export default function Page() {
   const pitchTranscriptText = joinTranscriptUpdates(roundState.pitchCapture.transcriptUpdates);
   const offersByJudge = Object.fromEntries(roundState.offers.map((offer) => [offer.judgeId, offer]));
   const offerJudgeIds = roundState.offers.map((offer) => offer.judgeId);
+  const allowedActions = getAllowedActions(roundState, { nowMs });
   const liveJudgePresence = Object.fromEntries(
     (liveReactionEvent?.judges || []).map((judge) => [judge.judgeId, judge])
   );
@@ -429,6 +435,48 @@ export default function Page() {
     setAcceptedOfferJudgeId(null);
     commitRoundAction({
       type: PLAYER_ACTIONS.REJECT_DEAL
+    });
+  }
+
+  function handleStartBargain(offerId) {
+    const offer = roundState.offers.find((o) => o.id === offerId);
+    if (!offer) return;
+    setBargainMode(true);
+    setBargainOfferId(offerId);
+    setBargainAmount(String(offer.amount));
+    setBargainEquity(String(offer.equity));
+  }
+
+  function handleSubmitBargain() {
+    if (!bargainOfferId) return;
+    const amount = Number(bargainAmount);
+    const equity = Number(bargainEquity);
+    if (!Number.isFinite(amount) || amount <= 0 || !Number.isFinite(equity) || equity < 0 || equity > 100) return;
+
+    commitRoundAction({
+      type: PLAYER_ACTIONS.SUBMIT_BARGAIN,
+      payload: {
+        offerId: bargainOfferId,
+        terms: { amount, equity }
+      }
+    });
+
+    setBargainMode(false);
+    setBargainOfferId(null);
+    setBargainAmount("");
+    setBargainEquity("");
+  }
+
+  function handleCancelBargain() {
+    setBargainMode(false);
+    setBargainOfferId(null);
+    setBargainAmount("");
+    setBargainEquity("");
+  }
+
+  function handleDeclineQuestion() {
+    commitRoundAction({
+      type: PLAYER_ACTIONS.DECLINE_QUESTION
     });
   }
 
@@ -758,6 +806,82 @@ export default function Page() {
             <p className="mt-4 text-xs uppercase tracking-wide text-white/65 md:text-sm">
               Closing reason: {roundState.pitchCapture.closeReason}
             </p>
+          </div>
+        </section>
+      )}
+
+      {(phase === "judging" || phase === "offer-select") && (allowedActions.includes(PLAYER_ACTIONS.DECLINE_QUESTION) || allowedActions.includes(PLAYER_ACTIONS.SUBMIT_BARGAIN)) && (
+        <section className="absolute inset-x-0 bottom-3 z-50 px-3 md:bottom-6 md:px-6">
+          <div className="mx-auto w-full max-w-4xl rounded-3xl border border-white/25 bg-black/82 px-4 py-4 shadow-dialogue backdrop-blur md:px-6 md:py-5">
+            <p className="font-display text-lg text-white md:text-xl">Negotiation Actions</p>
+
+            {!bargainMode && (
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                {allowedActions.includes(PLAYER_ACTIONS.DECLINE_QUESTION) && (
+                  <button
+                    suppressHydrationWarning
+                    type="button"
+                    onClick={handleDeclineQuestion}
+                    className="rounded-xl border border-white/45 bg-white/10 px-5 py-2 text-sm font-semibold text-white transition hover:bg-white/20 md:text-base"
+                  >
+                    Decline to Answer
+                  </button>
+                )}
+                {allowedActions.includes(PLAYER_ACTIONS.SUBMIT_BARGAIN) && roundState.offers.map((offer) => (
+                  <button
+                    suppressHydrationWarning
+                    key={offer.id}
+                    type="button"
+                    onClick={() => handleStartBargain(offer.id)}
+                    className="rounded-xl border border-amber-400/60 bg-amber-500/15 px-5 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-500/25 md:text-base"
+                  >
+                    Bargain with {offer.judgeName}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {bargainMode && (
+              <div className="mt-3 space-y-3">
+                <p className="text-sm text-white/80">Propose revised terms for this offer:</p>
+                <div className="flex flex-wrap items-end gap-3">
+                  <label className="block">
+                    <span className="text-xs text-white/70">Amount ($)</span>
+                    <input
+                      type="number"
+                      value={bargainAmount}
+                      onChange={(e) => setBargainAmount(e.target.value)}
+                      className="mt-1 block w-32 rounded-lg border border-white/30 bg-white/10 px-3 py-2 text-sm text-white"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs text-white/70">Equity (%)</span>
+                    <input
+                      type="number"
+                      value={bargainEquity}
+                      onChange={(e) => setBargainEquity(e.target.value)}
+                      className="mt-1 block w-24 rounded-lg border border-white/30 bg-white/10 px-3 py-2 text-sm text-white"
+                    />
+                  </label>
+                  <button
+                    suppressHydrationWarning
+                    type="button"
+                    onClick={handleSubmitBargain}
+                    className="rounded-xl border border-green-400/60 bg-green-500/15 px-5 py-2 text-sm font-semibold text-green-200 transition hover:bg-green-500/25 md:text-base"
+                  >
+                    Submit Bargain
+                  </button>
+                  <button
+                    suppressHydrationWarning
+                    type="button"
+                    onClick={handleCancelBargain}
+                    className="rounded-xl border border-white/30 bg-white/5 px-5 py-2 text-sm font-semibold text-white/70 transition hover:bg-white/10 md:text-base"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </section>
       )}
