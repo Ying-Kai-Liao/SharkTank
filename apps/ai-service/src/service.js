@@ -1,5 +1,6 @@
 import { createJudgeServiceInput } from "../../../packages/contracts/src/index.js";
 import { loadAiServiceConfig, normalizeAiServiceConfig } from "./config.js";
+import { generateDebrief as generateDebriefNarratives } from "./debrief.js";
 import { createJudgeOrchestrationGraph, createJudgeReplanGraph } from "./graph.js";
 import { InMemoryJudgeMemoryStore } from "./memory.js";
 import { createJudgeProvider } from "./providers.js";
@@ -140,6 +141,14 @@ export function createJudgeOrchestrationService(options = {}) {
       }
 
       return { turnIntents: result.turnIntents };
+    },
+
+    async generateDebrief(request) {
+      const providerOptions = config.provider === "openai"
+        ? { provider: "openai", openAiApiKey: config.openAiApiKey, openAiModel: config.openAiModel }
+        : {};
+
+      return generateDebriefNarratives(request, providerOptions);
     }
   };
 }

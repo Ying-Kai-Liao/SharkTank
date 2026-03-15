@@ -8,6 +8,7 @@ import {
   PITCH_SOURCE_TYPES,
   ROUND_STATES,
   validateBargainPayload,
+  validateDebriefPayload,
   validateJudgeBundle,
   validatePanelBudget,
   validatePitchStart,
@@ -124,6 +125,7 @@ export function createInitialGameState(options = {}) {
     offers: [],
     acceptedDealId: null,
     roundResult: null,
+    debrief: null,
     transcript: [],
     founderActions: [],
     pitchCapture: createPitchCaptureState(pitchDurationSeconds),
@@ -176,6 +178,8 @@ export function getAllowedActions(state, options = {}) {
       return state.offers.length
         ? [PLAYER_ACTIONS.ACCEPT_DEAL, PLAYER_ACTIONS.REJECT_DEAL, PLAYER_ACTIONS.SUBMIT_BARGAIN]
         : [PLAYER_ACTIONS.ADVANCE];
+    case ROUND_STATES.ROUND_RESULT:
+      return [PLAYER_ACTIONS.REQUEST_DEBRIEF, PLAYER_ACTIONS.ADVANCE];
     default:
       return [];
   }
@@ -586,6 +590,15 @@ export function applyAction(state, action) {
         roundResult,
         transcript: appendTranscript(state, "Founder", "Founder declined to answer. No offers were generated."),
         founderActions: appendFounderAction(state, declineAction)
+      });
+    }
+    case PLAYER_ACTIONS.REQUEST_DEBRIEF: {
+      assertAction(state.currentState, ROUND_STATES.ROUND_RESULT, action.type);
+      validateDebriefPayload(action.payload?.debrief);
+
+      return cloneState(state, {
+        currentState: ROUND_STATES.DEBRIEF,
+        debrief: action.payload.debrief
       });
     }
     default:
