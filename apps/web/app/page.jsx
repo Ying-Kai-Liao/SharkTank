@@ -5,10 +5,12 @@ import { useRouter } from "next/navigation";
 import {
   applyAction,
   createInitialGameState,
+  createLivePitchTranscriptSource,
   createMockPitchTranscriptSource,
   createPitchCaptureAdapter,
   getAllowedActions,
   getPitchTimerSnapshot,
+  isSpeechRecognitionSupported,
   JUDGE_PROFILES,
   PANEL_EVENT_TYPES,
   PLAYER_ACTIONS,
@@ -79,25 +81,6 @@ function joinTranscriptUpdates(updates) {
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function createJudgeBundle(evaluation) {
-  const leadQuestion = "What evidence do you have that customers will keep buying this?";
-
-  return {
-    leadQuestion,
-    judgeResponses: JUDGE_PROFILES.map((judge, index) => ({
-      judgeId: judge.id,
-      judgeName: judge.name,
-      sentiment: index === 0 ? "impressed" : "interested",
-      shortReaction: `${judge.name} sees enough traction to keep pressing on the core business case.`,
-      question: leadQuestion,
-      rationaleTags: [
-        evaluation.business_viability >= 70 ? "strong_monetization" : "needs_revenue_proof",
-        evaluation.clarity >= 70 ? "clear_pitch" : "needs_clarity"
-      ]
-    }))
-  };
 }
 
 function averageEvaluationScore(evaluation) {
@@ -422,6 +405,10 @@ export default function Page() {
       query.set("acceptedJudgeId", acceptedOfferJudgeId);
     }
 
+    const currentState = roundStateRef.current;
+    const transcript = currentState.pitch || pitchTranscriptText || "";
+    query.set("transcript", transcript);
+
     startTransition(() => {
       router.push(`/feedback?${query.toString()}`);
     });
@@ -452,6 +439,9 @@ export default function Page() {
       countdownAudioRef.current.currentTime = 0;
     }
 
+    const useLive = isSpeechRecognitionSupported();
+    const sourceType = useLive ? PITCH_SOURCE_TYPES.LIVE_STT : PITCH_SOURCE_TYPES.MOCK;
+
     const initialState = createRoundState();
     const startedAtMs = Date.now();
     const startedState = applyAction(initialState, {
@@ -459,7 +449,7 @@ export default function Page() {
       payload: {
         durationSeconds: PITCH_SECONDS,
         startedAtMs,
-        sourceType: PITCH_SOURCE_TYPES.MOCK
+        sourceType
       }
     });
 
@@ -478,8 +468,12 @@ export default function Page() {
     setRoundResult(null);
     resetLiveReactionState();
 
+    const source = useLive
+      ? createLivePitchTranscriptSource()
+      : createMockPitchTranscriptSource();
+
     const adapter = createPitchCaptureAdapter({
-      source: createMockPitchTranscriptSource(),
+      source,
       onTranscriptUpdate: (update) => {
         commitRoundAction(
           {
@@ -550,14 +544,47 @@ export default function Page() {
     }
   }
 
-  function advancePanelTurn(questionText) {
+  async function advancePanelTurn(questionText) {
     const prevQuestion = [...(roundStateRef.current.panel?.events || [])]
       .reverse()
       .find((e) => e.type === PANEL_EVENT_TYPES.JUDGE_QUESTION);
 
+    let resolvedQuestion = questionText;
+
+    if (!resolvedQuestion) {
+      try {
+        const currentState = roundStateRef.current;
+        const response = await fetch("/api/judge-reactions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: "replan",
+            pitch: currentState.pitch,
+            evaluation: currentState.evaluation,
+            transcript: currentState.transcript,
+            turnNumber: currentState.panel?.turn || 0,
+            founderActions: currentState.founderActions
+          })
+        });
+
+        if (response.ok) {
+          const payload = await response.json();
+          const intents = payload?.turnIntents;
+          if (Array.isArray(intents)) {
+            const askingJudge = intents.find((intent) => intent.intent === "ask" && intent.question);
+            if (askingJudge) {
+              resolvedQuestion = askingJudge.question;
+            }
+          }
+        }
+      } catch {
+        // Fall back to panel director's default question
+      }
+    }
+
     const nextState = commitRoundAction({
       type: PLAYER_ACTIONS.ADVANCE_PANEL_TURN,
-      payload: questionText ? { question: questionText } : {}
+      payload: resolvedQuestion ? { question: resolvedQuestion } : {}
     });
 
     if (nextState.currentState === ROUND_STATES.DEALS) {
@@ -934,11 +961,51 @@ export default function Page() {
       return;
     }
 
-    const timeoutId = setTimeout(() => {
+    const timeoutId = setTimeout(async () => {
       initializeJudgingFlow();
+
+      let bundle = null;
+      try {
+        const response = await fetch("/api/judge-reactions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: "initial",
+            pitch: roundState.pitch,
+            evaluation: roundState.evaluation,
+            transcript: roundState.transcript
+          })
+        });
+
+        if (response.ok) {
+          const payload = await response.json();
+          bundle = payload?.bundle;
+        }
+      } catch {
+        // Fall back to heuristic bundle below
+      }
+
+      if (!bundle || !bundle.judgeResponses || !bundle.leadQuestion) {
+        const fallbackQuestion = "What evidence do you have that customers will keep buying this?";
+        bundle = {
+          leadQuestion: fallbackQuestion,
+          judgeResponses: JUDGE_PROFILES.map((judge, index) => ({
+            judgeId: judge.id,
+            judgeName: judge.name,
+            sentiment: index === 0 ? "impressed" : "interested",
+            shortReaction: `${judge.name} sees enough traction to keep pressing on the core business case.`,
+            question: fallbackQuestion,
+            rationaleTags: [
+              roundState.evaluation?.business_viability >= 70 ? "strong_monetization" : "needs_revenue_proof",
+              roundState.evaluation?.clarity >= 70 ? "clear_pitch" : "needs_clarity"
+            ]
+          }))
+        };
+      }
+
       commitRoundAction({
         type: PLAYER_ACTIONS.ADVANCE,
-        payload: createJudgeBundle(roundState.evaluation)
+        payload: bundle
       });
       setPhase("judging");
       advancePanelTurn();

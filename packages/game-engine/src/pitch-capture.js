@@ -87,12 +87,78 @@ export function createMockPitchTranscriptSource({
   };
 }
 
+export function isSpeechRecognitionSupported() {
+  return typeof window !== "undefined" &&
+    (typeof window.SpeechRecognition === "function" ||
+     typeof window.webkitSpeechRecognition === "function");
+}
+
 export function createLivePitchTranscriptSource() {
+  let recognition = null;
+  let sequence = 0;
+
   return {
     sourceType: PITCH_SOURCE_TYPES.LIVE_STT,
-    start() {
-      return () => {};
+    start({ emitUpdate }) {
+      if (!isSpeechRecognitionSupported()) {
+        return () => {};
+      }
+
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = "en-US";
+
+      recognition.onresult = (event) => {
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const result = event.results[i];
+          if (result.isFinal) {
+            const text = result[0].transcript.trim();
+            if (text) {
+              const currentSequence = sequence++;
+              emitUpdate({
+                eventId: `live-${currentSequence}`,
+                sequence: currentSequence,
+                text,
+                receivedAtMs: Date.now(),
+                sourceType: PITCH_SOURCE_TYPES.LIVE_STT
+              });
+            }
+          }
+        }
+      };
+
+      recognition.onerror = () => {};
+
+      recognition.onend = () => {
+        if (recognition) {
+          try {
+            recognition.start();
+          } catch {
+            // Already started or stopped intentionally
+          }
+        }
+      };
+
+      recognition.start();
+
+      return () => {
+        const ref = recognition;
+        recognition = null;
+        sequence = 0;
+        if (ref) {
+          try { ref.stop(); } catch { /* already stopped */ }
+        }
+      };
     },
-    stop() {}
+    stop() {
+      const ref = recognition;
+      recognition = null;
+      sequence = 0;
+      if (ref) {
+        try { ref.stop(); } catch { /* already stopped */ }
+      }
+    }
   };
 }

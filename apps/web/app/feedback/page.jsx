@@ -41,17 +41,19 @@ function FeedbackPageContent() {
       setError("");
 
       try {
-        const query = new URLSearchParams({
-          score,
-          scoreTier,
-          decisionType
+        const transcript = searchParams.get("transcript") || "";
+
+        const response = await fetch("/api/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            score,
+            scoreTier,
+            decisionType,
+            acceptedJudgeId: acceptedJudgeId || null,
+            transcript
+          })
         });
-
-        if (acceptedJudgeId) {
-          query.set("acceptedJudgeId", acceptedJudgeId);
-        }
-
-        const response = await fetch(`/api/feedback?${query.toString()}`);
         const payload = response.ok ? await response.json() : null;
 
         if (!cancelled) {
