@@ -6,8 +6,6 @@ export const ROUND_STATES = Object.freeze({
   FOLLOW_UP: "FOLLOW_UP",
   PANEL: "PANEL",
   DEALS: "DEALS",
-  PLAYER_DECISION: "PLAYER_DECISION",
-  ROUND_RESULT: "ROUND_RESULT",
   DEBRIEF: "DEBRIEF"
 });
 
@@ -20,9 +18,7 @@ export const PLAYER_ACTIONS = Object.freeze({
   ACCEPT_DEAL: "accept_deal",
   REJECT_DEAL: "reject_deal",
   ADVANCE: "advance_when_timer_expires",
-  SUBMIT_BARGAIN: "submit_bargain",
-  DECLINE_QUESTION: "decline_question",
-  REQUEST_DEBRIEF: "request_debrief"
+  DECLINE_QUESTION: "decline_question"
 });
 
 export const NEGOTIATION_ACTION_TYPES = Object.freeze([

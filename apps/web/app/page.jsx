@@ -40,8 +40,6 @@ const JUDGE_TO_STAGE = {
   tori: "shark"
 };
 const OFFER_CONVERSATION = offerConversation.conversation || [];
-const RESULT_ANIMATION_MS = 1800;
-
 function createRoundState() {
   return createInitialGameState({
     pitchDurationSeconds: PITCH_SECONDS
@@ -99,33 +97,6 @@ function averageEvaluationScore(evaluation) {
   return Math.round(values.reduce((total, value) => total + value, 0) / values.length);
 }
 
-function resolveScoreTier(score) {
-  if (score >= 80) {
-    return "good";
-  }
-
-  if (score >= 62) {
-    return "medium";
-  }
-
-  return "bad";
-}
-
-function buildRoundResultSummary(state, acceptedJudgeId) {
-  const score = averageEvaluationScore(state.evaluation);
-  const decisionType = acceptedJudgeId ? "accept" : "disaccept";
-
-  return {
-    score,
-    scoreTier: resolveScoreTier(score),
-    decisionType,
-    catchphrase:
-      state.roundResult?.summary ||
-      state.roundResult?.headline ||
-      "The round has been resolved from the deterministic game state."
-  };
-}
-
 export default function Page() {
   const router = useRouter();
   const hasNavigatedFeedbackRef = useRef(false);
@@ -148,12 +119,7 @@ export default function Page() {
   const [offerLineIndex, setOfferLineIndex] = useState(0);
   const [offerDecisions, setOfferDecisions] = useState({});
   const [acceptedOfferJudgeId, setAcceptedOfferJudgeId] = useState(null);
-  const [roundResult, setRoundResult] = useState(null);
   const [liveReactionEvent, setLiveReactionEvent] = useState(null);
-  const [bargainMode, setBargainMode] = useState(false);
-  const [bargainOfferId, setBargainOfferId] = useState(null);
-  const [bargainAmount, setBargainAmount] = useState("");
-  const [bargainEquity, setBargainEquity] = useState("");
   const [pitchSourceType, setPitchSourceType] = useState(PITCH_SOURCE_TYPES.MOCK);
   const [mediaRecorderAvailable, setMediaRecorderAvailable] = useState(false);
   const [debriefData, setDebriefData] = useState(null);
@@ -163,8 +129,10 @@ export default function Page() {
   const activeOfferLine = OFFER_CONVERSATION[offerLineIndex] || null;
   const pitchTimer = getPitchTimerSnapshot(roundState, nowMs);
   const pitchTranscriptText = joinTranscriptUpdates(roundState.pitchCapture.transcriptUpdates);
-  const offersByJudge = Object.fromEntries(roundState.offers.map((offer) => [offer.judgeId, offer]));
-  const offerJudgeIds = roundState.offers.map((offer) => offer.judgeId);
+  const offersByJudge = Object.fromEntries(
+    roundState.offers.map((offer) => [JUDGE_TO_STAGE[offer.judgeId] || offer.judgeId, offer])
+  );
+  const offerJudgeIds = roundState.offers.map((offer) => JUDGE_TO_STAGE[offer.judgeId] || offer.judgeId);
   const allowedActions = getAllowedActions(roundState, { nowMs });
   const liveJudgePresence = Object.fromEntries(
     (liveReactionEvent?.judges || []).map((judge) => [judge.judgeId, judge])
@@ -279,7 +247,6 @@ export default function Page() {
     setOfferLineIndex(0);
     setOfferDecisions({});
     setAcceptedOfferJudgeId(null);
-    setRoundResult(null);
     setDebriefData(null);
     setDebriefLoading(false);
     debriefFetchedRef.current = false;
@@ -287,16 +254,20 @@ export default function Page() {
   }
 
   function moveToFeedbackScreen() {
-    if (!roundResult || hasNavigatedFeedbackRef.current) {
+    if (hasNavigatedFeedbackRef.current) {
       return;
     }
 
     hasNavigatedFeedbackRef.current = true;
 
+    const score = averageEvaluationScore(roundStateRef.current.evaluation);
+    const scoreTier = score >= 80 ? "good" : score >= 62 ? "medium" : "bad";
+    const decisionType = acceptedOfferJudgeId ? "accept" : "disaccept";
+
     const query = new URLSearchParams({
-      score: String(roundResult.score),
-      scoreTier: String(roundResult.scoreTier),
-      decisionType: String(roundResult.decisionType)
+      score: String(score),
+      scoreTier,
+      decisionType
     });
 
     if (acceptedOfferJudgeId) {
@@ -335,7 +306,6 @@ export default function Page() {
     setOfferLineIndex(0);
     setOfferDecisions({});
     setAcceptedOfferJudgeId(null);
-    setRoundResult(null);
     setDebriefData(null);
     setDebriefLoading(false);
     debriefFetchedRef.current = false;
@@ -391,14 +361,8 @@ export default function Page() {
         return;
       }
 
-      const decisionState = commitRoundAction({
-        type: PLAYER_ACTIONS.ADVANCE
-      });
-
-      if (!decisionState.offers.length) {
-        commitRoundAction({
-          type: PLAYER_ACTIONS.ADVANCE
-        });
+      if (!roundStateRef.current.offers.length) {
+        commitRoundAction({ type: PLAYER_ACTIONS.ADVANCE });
         return;
       }
 
@@ -416,21 +380,13 @@ export default function Page() {
       setJudgingFinished(true);
       setChatEnabled(false);
 
-      if (OFFER_CONVERSATION.length) {
+      if (!nextState.offers.length) {
+        commitRoundAction({ type: PLAYER_ACTIONS.ADVANCE });
+      } else if (OFFER_CONVERSATION.length) {
         setOfferLineIndex(0);
         setPhase("offer-dialogue");
       } else {
-        const decisionState = commitRoundAction({
-          type: PLAYER_ACTIONS.ADVANCE
-        });
-
-        if (!decisionState.offers.length) {
-          commitRoundAction({
-            type: PLAYER_ACTIONS.ADVANCE
-          });
-        } else {
-          setPhase("offer-select");
-        }
+        setPhase("offer-select");
       }
       return;
     }
@@ -474,46 +430,23 @@ export default function Page() {
     });
   }
 
-  function handleStartBargain(offerId) {
-    const offer = roundState.offers.find((o) => o.id === offerId);
-    if (!offer) return;
-    setBargainMode(true);
-    setBargainOfferId(offerId);
-    setBargainAmount(String(offer.amount));
-    setBargainEquity(String(offer.equity));
-  }
-
-  function handleSubmitBargain() {
-    if (!bargainOfferId) return;
-    const amount = Number(bargainAmount);
-    const equity = Number(bargainEquity);
-    if (!Number.isFinite(amount) || amount <= 0 || !Number.isFinite(equity) || equity < 0 || equity > 100) return;
-
-    commitRoundAction({
-      type: PLAYER_ACTIONS.SUBMIT_BARGAIN,
-      payload: {
-        offerId: bargainOfferId,
-        terms: { amount, equity }
-      }
-    });
-
-    setBargainMode(false);
-    setBargainOfferId(null);
-    setBargainAmount("");
-    setBargainEquity("");
-  }
-
-  function handleCancelBargain() {
-    setBargainMode(false);
-    setBargainOfferId(null);
-    setBargainAmount("");
-    setBargainEquity("");
-  }
-
   function handleDeclineQuestion() {
-    commitRoundAction({
+    const nextState = commitRoundAction({
       type: PLAYER_ACTIONS.DECLINE_QUESTION
     });
+
+    if (nextState.currentState === ROUND_STATES.DEALS) {
+      if (nextState.offers.length) {
+        if (OFFER_CONVERSATION.length) {
+          setOfferLineIndex(0);
+          setPhase("offer-dialogue");
+        } else {
+          setPhase("offer-select");
+        }
+      } else {
+        commitRoundAction({ type: PLAYER_ACTIONS.ADVANCE });
+      }
+    }
   }
 
   async function handleSendMessage() {
@@ -687,18 +620,13 @@ export default function Page() {
   }, [phase, roundState.currentState, roundState.evaluation]);
 
   useEffect(() => {
-    if (roundState.currentState !== ROUND_STATES.ROUND_RESULT) {
+    if (roundState.currentState !== ROUND_STATES.DEBRIEF) {
       return;
     }
 
-    setRoundResult(buildRoundResultSummary(roundState, acceptedOfferJudgeId));
-    if (phase !== "result-animation" && phase !== "result" && phase !== "debrief") {
-      setPhase("result-animation");
-    }
-  }, [acceptedOfferJudgeId, phase, roundState]);
+    setPhase("debrief");
 
-  useEffect(() => {
-    if (roundState.currentState !== ROUND_STATES.ROUND_RESULT || debriefFetchedRef.current) {
+    if (debriefFetchedRef.current) {
       return;
     }
 
@@ -727,18 +655,6 @@ export default function Page() {
         setDebriefLoading(false);
       });
   }, [roundState.currentState]);
-
-  useEffect(() => {
-    if (phase !== "result-animation" || !roundResult) {
-      return;
-    }
-
-    const timeoutId = setTimeout(() => {
-      setPhase("result");
-    }, RESULT_ANIMATION_MS);
-
-    return () => clearTimeout(timeoutId);
-  }, [phase, roundResult]);
 
   // Auto-navigate removed: player now chooses between debrief and feedback
 
@@ -881,132 +797,18 @@ export default function Page() {
         </section>
       )}
 
-      {(phase === "judging" || phase === "offer-select") && (allowedActions.includes(PLAYER_ACTIONS.DECLINE_QUESTION) || allowedActions.includes(PLAYER_ACTIONS.SUBMIT_BARGAIN)) && (
+      {phase === "judging" && allowedActions.includes(PLAYER_ACTIONS.DECLINE_QUESTION) && (
         <section className="absolute inset-x-0 bottom-3 z-50 px-3 md:bottom-6 md:px-6">
           <div className="mx-auto w-full max-w-4xl rounded-3xl border border-white/25 bg-black/82 px-4 py-4 shadow-dialogue backdrop-blur md:px-6 md:py-5">
             <p className="font-display text-lg text-white md:text-xl">Negotiation Actions</p>
-
-            {!bargainMode && (
-              <div className="mt-3 flex flex-wrap items-center gap-3">
-                {allowedActions.includes(PLAYER_ACTIONS.DECLINE_QUESTION) && (
-                  <button
-                    suppressHydrationWarning
-                    type="button"
-                    onClick={handleDeclineQuestion}
-                    className="rounded-xl border border-white/45 bg-white/10 px-5 py-2 text-sm font-semibold text-white transition hover:bg-white/20 md:text-base"
-                  >
-                    Decline to Answer
-                  </button>
-                )}
-                {allowedActions.includes(PLAYER_ACTIONS.SUBMIT_BARGAIN) && roundState.offers.map((offer) => (
-                  <button
-                    suppressHydrationWarning
-                    key={offer.id}
-                    type="button"
-                    onClick={() => handleStartBargain(offer.id)}
-                    className="rounded-xl border border-amber-400/60 bg-amber-500/15 px-5 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-500/25 md:text-base"
-                  >
-                    Bargain with {offer.judgeName}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {bargainMode && (
-              <div className="mt-3 space-y-3">
-                <p className="text-sm text-white/80">Propose revised terms for this offer:</p>
-                <div className="flex flex-wrap items-end gap-3">
-                  <label className="block">
-                    <span className="text-xs text-white/70">Amount ($)</span>
-                    <input
-                      type="number"
-                      value={bargainAmount}
-                      onChange={(e) => setBargainAmount(e.target.value)}
-                      className="mt-1 block w-32 rounded-lg border border-white/30 bg-white/10 px-3 py-2 text-sm text-white"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs text-white/70">Equity (%)</span>
-                    <input
-                      type="number"
-                      value={bargainEquity}
-                      onChange={(e) => setBargainEquity(e.target.value)}
-                      className="mt-1 block w-24 rounded-lg border border-white/30 bg-white/10 px-3 py-2 text-sm text-white"
-                    />
-                  </label>
-                  <button
-                    suppressHydrationWarning
-                    type="button"
-                    onClick={handleSubmitBargain}
-                    className="rounded-xl border border-green-400/60 bg-green-500/15 px-5 py-2 text-sm font-semibold text-green-200 transition hover:bg-green-500/25 md:text-base"
-                  >
-                    Submit Bargain
-                  </button>
-                  <button
-                    suppressHydrationWarning
-                    type="button"
-                    onClick={handleCancelBargain}
-                    className="rounded-xl border border-white/30 bg-white/5 px-5 py-2 text-sm font-semibold text-white/70 transition hover:bg-white/10 md:text-base"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </section>
-      )}
-
-      {phase === "result-animation" && (
-        <section className="pointer-events-none absolute inset-0 z-40 overflow-hidden bg-black/30">
-          <span className="result-triangle result-triangle-a" />
-          <span className="result-triangle result-triangle-b" />
-          <span className="result-triangle result-triangle-c" />
-          <span className="result-triangle result-triangle-d" />
-          <span className="result-triangle result-triangle-e" />
-          <span className="result-triangle result-triangle-f" />
-          <span className="result-triangle result-triangle-g" />
-          <span className="result-triangle result-triangle-h" />
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/40 bg-black/45 px-6 py-4 text-center backdrop-blur">
-            <p className="font-display text-xl text-white/90 md:text-2xl">Computing Result</p>
-          </div>
-        </section>
-      )}
-
-      {phase === "result" && roundResult && (
-        <section className="absolute inset-0 z-40 flex items-center justify-center bg-black/55 p-4">
-          <div className="w-full max-w-xl rounded-3xl border border-white/25 bg-black/78 p-6 text-center backdrop-blur md:p-8">
-            <p className="font-display text-4xl text-white md:text-6xl">Score {roundResult.score}</p>
-            <p className="mt-3 text-base uppercase tracking-wide text-white/80 md:text-lg">{roundResult.scoreTier} result</p>
-            <p className="mt-4 text-sm text-white/95 md:text-base">{roundResult.catchphrase}</p>
-            <p className="mt-4 text-xs text-white/70 md:text-sm">
-              Decision: {roundResult.decisionType === "accept" ? "Accepted an offer" : "Rejected available offers"}
-            </p>
-            <div className="mt-6 flex flex-col items-center gap-3">
+            <div className="mt-3 flex flex-wrap items-center gap-3">
               <button
                 suppressHydrationWarning
                 type="button"
-                onClick={() => {
-                  if (debriefData) {
-                    commitRoundAction({
-                      type: PLAYER_ACTIONS.REQUEST_DEBRIEF,
-                      payload: { debrief: debriefData }
-                    });
-                    setPhase("debrief");
-                  }
-                }}
-                disabled={!debriefData}
-                className="rounded-xl border border-amber-400/40 bg-amber-500/10 px-5 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40 md:text-base"
-              >
-                {debriefLoading ? "Loading debrief..." : "See what the judges were thinking"}
-              </button>
-              <button
-                suppressHydrationWarning
-                type="button"
-                onClick={moveToFeedbackScreen}
+                onClick={handleDeclineQuestion}
                 className="rounded-xl border border-white/45 bg-white/10 px-5 py-2 text-sm font-semibold text-white transition hover:bg-white/20 md:text-base"
               >
-                Continue to Feedback
+                Decline to Answer
               </button>
             </div>
           </div>

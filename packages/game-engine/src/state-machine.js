@@ -7,15 +7,13 @@ import {
   PITCH_CLOSE_REASONS,
   PITCH_SOURCE_TYPES,
   ROUND_STATES,
-  validateBargainPayload,
-  validateDebriefPayload,
   validateJudgeBundle,
   validatePanelBudget,
   validatePitchStart,
   validatePitchTranscriptUpdate
 } from "../../contracts/src/index.js";
 import { JUDGE_PROFILES } from "./judges.js";
-import { clampBargainTerms, createRevisedOffer, createRoundResult, generateOffers } from "./offers.js";
+import { createRoundResult, generateOffers } from "./offers.js";
 import { decideContinuation, selectNextJudge } from "./panel-director.js";
 import { evaluateAnswer, evaluatePitch, mergeEvaluations } from "./scoring.js";
 
@@ -161,25 +159,16 @@ export function getAllowedActions(state, options = {}) {
     case ROUND_STATES.PITCH_CLOSED:
     case ROUND_STATES.JUDGE_REACTIONS:
     case ROUND_STATES.DEALS:
-      return [PLAYER_ACTIONS.ADVANCE];
-    case ROUND_STATES.FOLLOW_UP: {
-      const followUpActions = [PLAYER_ACTIONS.SUBMIT_ANSWER, PLAYER_ACTIONS.DECLINE_QUESTION];
-      if (state.offers.length) {
-        followUpActions.push(PLAYER_ACTIONS.SUBMIT_BARGAIN);
-      }
-      return followUpActions;
-    }
+      return state.offers.length
+        ? [PLAYER_ACTIONS.ACCEPT_DEAL, PLAYER_ACTIONS.REJECT_DEAL]
+        : [PLAYER_ACTIONS.ADVANCE];
+    case ROUND_STATES.FOLLOW_UP:
+      return [PLAYER_ACTIONS.SUBMIT_ANSWER, PLAYER_ACTIONS.DECLINE_QUESTION];
     case ROUND_STATES.PANEL:
       if (state.panel?.awaitingAnswer) {
         return [PLAYER_ACTIONS.SUBMIT_ANSWER];
       }
       return [PLAYER_ACTIONS.ADVANCE_PANEL_TURN];
-    case ROUND_STATES.PLAYER_DECISION:
-      return state.offers.length
-        ? [PLAYER_ACTIONS.ACCEPT_DEAL, PLAYER_ACTIONS.REJECT_DEAL, PLAYER_ACTIONS.SUBMIT_BARGAIN]
-        : [PLAYER_ACTIONS.ADVANCE];
-    case ROUND_STATES.ROUND_RESULT:
-      return [PLAYER_ACTIONS.REQUEST_DEBRIEF, PLAYER_ACTIONS.ADVANCE];
     default:
       return [];
   }
@@ -202,7 +191,7 @@ function resolveDealAcceptance(state, dealId) {
   });
 
   return cloneState(state, {
-    currentState: ROUND_STATES.ROUND_RESULT,
+    currentState: ROUND_STATES.DEBRIEF,
     acceptedDealId: selectedOffer.id,
     roundResult,
     transcript: appendTranscript(
@@ -223,7 +212,7 @@ function resolveDealRejection(state) {
   });
 
   return cloneState(state, {
-    currentState: ROUND_STATES.ROUND_RESULT,
+    currentState: ROUND_STATES.DEBRIEF,
     roundResult,
     transcript: appendTranscript(
       state,
@@ -397,13 +386,7 @@ export function applyAction(state, action) {
         });
       }
 
-      if (state.currentState === ROUND_STATES.DEALS) {
-        return cloneState(state, {
-          currentState: ROUND_STATES.PLAYER_DECISION
-        });
-      }
-
-      if (state.currentState === ROUND_STATES.PLAYER_DECISION && !state.offers.length) {
+      if (state.currentState === ROUND_STATES.DEALS && !state.offers.length) {
         return resolveDealRejection(state);
       }
 
@@ -513,7 +496,7 @@ export function applyAction(state, action) {
       });
     }
     case PLAYER_ACTIONS.ACCEPT_DEAL: {
-      assertAction(state.currentState, ROUND_STATES.PLAYER_DECISION, action.type);
+      assertAction(state.currentState, ROUND_STATES.DEALS, action.type);
 
       if (!state.offers.length) {
         throw new InvalidActionError("There are no deals to accept.");
@@ -522,7 +505,7 @@ export function applyAction(state, action) {
       return resolveDealAcceptance(state, action.payload?.dealId);
     }
     case PLAYER_ACTIONS.REJECT_DEAL: {
-      assertAction(state.currentState, ROUND_STATES.PLAYER_DECISION, action.type);
+      assertAction(state.currentState, ROUND_STATES.DEALS, action.type);
 
       if (!state.offers.length) {
         throw new InvalidActionError("There are no deals to reject.");
@@ -530,75 +513,21 @@ export function applyAction(state, action) {
 
       return resolveDealRejection(state);
     }
-    case PLAYER_ACTIONS.SUBMIT_BARGAIN: {
-      if (state.currentState !== ROUND_STATES.FOLLOW_UP && state.currentState !== ROUND_STATES.PLAYER_DECISION) {
-        throw new InvalidActionError(`Cannot use "${action.type}" while round state is ${state.currentState}.`);
-      }
-
-      if (!state.offers.length) {
-        throw new InvalidActionError("Cannot bargain when no offers exist.");
-      }
-
-      validateBargainPayload(action.payload);
-
-      const targetOffer = state.offers.find((offer) => offer.id === action.payload.offerId);
-      if (!targetOffer) {
-        throw new InvalidActionError("The referenced offer does not exist.");
-      }
-
-      const clampedTerms = clampBargainTerms(targetOffer, action.payload.terms);
-      const revisedOffer = createRevisedOffer(targetOffer, clampedTerms);
-      const updatedOffers = state.offers.map((offer) =>
-        offer.id === targetOffer.id ? revisedOffer : offer
-      );
-
-      const founderAction = { type: "bargain", offerId: targetOffer.id, terms: clampedTerms };
-
-      return cloneState(state, {
-        offers: updatedOffers,
-        transcript: appendTranscript(
-          state,
-          "Founder",
-          `Founder proposes revised terms: $${clampedTerms.amount.toLocaleString()} for ${clampedTerms.equity}% equity.`
-        ),
-        founderActions: appendFounderAction(state, founderAction)
-      });
-    }
     case PLAYER_ACTIONS.DECLINE_QUESTION: {
       assertAction(state.currentState, ROUND_STATES.FOLLOW_UP, action.type);
 
       const declineAction = { type: "decline" };
       const offers = generateOffers(state.evaluation, JUDGE_PROFILES);
 
-      if (offers.length) {
-        return cloneState(state, {
-          currentState: ROUND_STATES.DEALS,
-          offers,
-          transcript: appendTranscript(state, "Founder", "Founder declined to answer the question."),
-          founderActions: appendFounderAction(state, declineAction)
-        });
-      }
-
-      const roundResult = createRoundResult({
-        evaluation: state.evaluation,
-        offers: [],
-        decision: { type: "no_offer" }
-      });
-
       return cloneState(state, {
-        currentState: ROUND_STATES.ROUND_RESULT,
-        roundResult,
-        transcript: appendTranscript(state, "Founder", "Founder declined to answer. No offers were generated."),
+        currentState: ROUND_STATES.DEALS,
+        offers,
+        transcript: appendTranscript(
+          state,
+          "Founder",
+          offers.length ? "Founder declined to answer the question." : "Founder declined to answer. No offers were generated."
+        ),
         founderActions: appendFounderAction(state, declineAction)
-      });
-    }
-    case PLAYER_ACTIONS.REQUEST_DEBRIEF: {
-      assertAction(state.currentState, ROUND_STATES.ROUND_RESULT, action.type);
-      validateDebriefPayload(action.payload?.debrief);
-
-      return cloneState(state, {
-        currentState: ROUND_STATES.DEBRIEF,
-        debrief: action.payload.debrief
       });
     }
     default:
