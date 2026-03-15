@@ -12,7 +12,7 @@ export {
 } from "../../contracts/src/index.js";
 export { buildDebriefData } from "./debrief.js";
 export { JUDGE_PROFILES } from "./judges.js";
-export { buildJudgeScorecard, clampBargainTerms, createRevisedOffer, createRoundResult, generateOffers } from "./offers.js";
+export { buildJudgeScorecard, createRoundResult, generateOffers } from "./offers.js";
 export { decideContinuation, selectNextJudge } from "./panel-director.js";
 export {
   createLivePitchTranscriptSource,

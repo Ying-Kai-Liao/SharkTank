@@ -7,8 +7,6 @@ import {
   buildDebriefData,
   buildJudgeScorecard,
   createInitialGameState,
-  getAllowedActions,
-  InvalidActionError,
   JUDGE_PROFILES,
   PLAYER_ACTIONS,
   PITCH_CLOSE_REASONS,
@@ -52,7 +50,7 @@ function createJudgeBundle(evaluation) {
   return bundle;
 }
 
-function advanceToRoundResult(state) {
+function advanceToDebrief() {
   let s = createInitialGameState({ pitchDurationSeconds: 12 });
   s = startPitch(s, 2_000, 12);
   s = submitPitchUpdate(s, { sequence: 0, text: "We run a subscription platform for indie game studios.", receivedAtMs: 2_100 });
@@ -61,49 +59,15 @@ function advanceToRoundResult(state) {
   s = applyAction(s, { type: PLAYER_ACTIONS.ADVANCE, payload: { ...createJudgeBundle(s.evaluation), usePanel: false } });
   s = applyAction(s, { type: PLAYER_ACTIONS.ADVANCE });
   s = applyAction(s, { type: PLAYER_ACTIONS.SUBMIT_ANSWER, payload: { answer: "We have paid pilots and recurring revenue from signed customers." } });
-  s = applyAction(s, { type: PLAYER_ACTIONS.ADVANCE });
   s = applyAction(s, { type: PLAYER_ACTIONS.ACCEPT_DEAL, payload: { dealId: s.offers[0].id } });
   return s;
 }
 
-function createMinimalDebrief(evaluation) {
-  const debriefData = buildDebriefData(evaluation, JUDGE_PROFILES);
-  return debriefData;
-}
-
-test("ROUND_RESULT transitions to DEBRIEF with valid debrief payload", () => {
-  const state = advanceToRoundResult();
-  assert.equal(state.currentState, ROUND_STATES.ROUND_RESULT);
-
-  const debrief = createMinimalDebrief(state.evaluation);
-  const next = applyAction(state, {
-    type: PLAYER_ACTIONS.REQUEST_DEBRIEF,
-    payload: { debrief }
-  });
-
-  assert.equal(next.currentState, ROUND_STATES.DEBRIEF);
-  assert.deepEqual(next.debrief, debrief);
-});
-
-test("REQUEST_DEBRIEF rejects when not in ROUND_RESULT state", () => {
-  const state = createInitialGameState();
-  assert.equal(state.currentState, ROUND_STATES.LOBBY);
-
-  assert.throws(() => {
-    applyAction(state, {
-      type: PLAYER_ACTIONS.REQUEST_DEBRIEF,
-      payload: { debrief: { judges: [], topDimension: "clarity" } }
-    });
-  }, InvalidActionError);
-});
-
-test("ROUND_RESULT allows both REQUEST_DEBRIEF and ADVANCE (skip path)", () => {
-  const state = advanceToRoundResult();
-  assert.equal(state.currentState, ROUND_STATES.ROUND_RESULT);
-
-  const allowed = getAllowedActions(state);
-  assert.ok(allowed.includes(PLAYER_ACTIONS.REQUEST_DEBRIEF));
-  assert.ok(allowed.includes(PLAYER_ACTIONS.ADVANCE));
+test("ACCEPT_DEAL transitions directly from DEALS to DEBRIEF", () => {
+  const state = advanceToDebrief();
+  assert.equal(state.currentState, ROUND_STATES.DEBRIEF);
+  assert.ok(state.roundResult);
+  assert.match(state.roundResult.headline, /Deal accepted/);
 });
 
 test("buildDebriefData output matches buildJudgeScorecard results", () => {
