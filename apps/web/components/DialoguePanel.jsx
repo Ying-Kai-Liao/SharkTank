@@ -1,3 +1,8 @@
+import { useEffect, useState } from "react";
+
+const TYPEWRITER_STEP_MS = 22;
+const TYPEWRITER_STEP_CHARS = 2;
+
 function MicrophoneIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5">
@@ -20,9 +25,45 @@ export default function DialoguePanel({
   onAdvance,
   showAdvance,
   statusText,
-  micActive = false
+  micActive = false,
+  typewriterEnabled = false
 }) {
   const sendDisabled = !chatEnabled || !inputValue.trim();
+  const [visibleLength, setVisibleLength] = useState(typewriterEnabled ? 0 : text.length);
+
+  useEffect(() => {
+    if (!typewriterEnabled) {
+      setVisibleLength(text.length);
+      return;
+    }
+
+    setVisibleLength(0);
+  }, [text, typewriterEnabled]);
+
+  useEffect(() => {
+    if (!typewriterEnabled || visibleLength >= text.length) {
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      setVisibleLength((current) => Math.min(text.length, current + TYPEWRITER_STEP_CHARS));
+    }, TYPEWRITER_STEP_MS);
+
+    return () => clearInterval(intervalId);
+  }, [text, typewriterEnabled, visibleLength]);
+
+  const displayedText = typewriterEnabled ? text.slice(0, visibleLength) : text;
+  const isTyping = typewriterEnabled && visibleLength < text.length;
+  const shouldShowAdvanceButton = showAdvance || isTyping;
+
+  function handleAdvanceClick() {
+    if (isTyping) {
+      setVisibleLength(text.length);
+      return;
+    }
+
+    onAdvance?.();
+  }
 
   function handleSubmit(event) {
     event.preventDefault();
@@ -41,7 +82,8 @@ export default function DialoguePanel({
         <div className="mb-4 space-y-2.5">
           <p className="text-lg font-semibold leading-tight text-stage-text md:text-xl">{speakerName}</p>
           <p className="max-w-4xl text-sm text-stage-text/95 md:text-[1.1rem] md:leading-[1.35]">
-            {text}
+            {displayedText}
+            {isTyping ? <span className="ml-0.5 inline-block h-[1em] w-2 animate-pulse rounded-full bg-white/80 align-middle" /> : null}
           </p>
         </div>
 
@@ -59,11 +101,11 @@ export default function DialoguePanel({
             </span>
           </div>
 
-          {showAdvance && (
+          {shouldShowAdvanceButton && (
             <button
               suppressHydrationWarning
               type="button"
-              onClick={onAdvance}
+              onClick={handleAdvanceClick}
               className="rounded-md border border-white/40 px-3 py-1 text-xs font-semibold text-white transition hover:bg-white/10 md:text-sm"
             >
               Next

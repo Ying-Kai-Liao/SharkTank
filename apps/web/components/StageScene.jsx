@@ -95,7 +95,8 @@ export default function StageScene({
   onAdvance,
   showAdvance,
   statusText,
-  micActive = false
+  micActive = false,
+  typewriterEnabled = false
 }) {
   const [hoveredJudgeId, setHoveredJudgeId] = useState(null);
   const [frameIndex, setFrameIndex] = useState(0);
@@ -342,6 +343,7 @@ export default function StageScene({
           showAdvance={showAdvance}
           statusText={statusText}
           micActive={micActive}
+          typewriterEnabled={typewriterEnabled}
         />
       )}
     </section>

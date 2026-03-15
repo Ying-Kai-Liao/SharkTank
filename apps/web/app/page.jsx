@@ -224,6 +224,9 @@ export default function Page() {
                   ? `Player replies sent: ${chatHistory.length}`
                   : "";
 
+  const judgeDialogueTypingEnabled =
+    (phase === "offer-dialogue" && Boolean(activeOfferLine)) ||
+    (phase === "judging" && panelAwaitingAnswer && Boolean(latestPanelQuestion));
   const showAdvance = phase === "offer-dialogue" && Boolean(activeOfferLine);
 
   function ensureAudioContext() {
@@ -1116,6 +1119,7 @@ export default function Page() {
         onAdvance={handleAdvanceDialogue}
         showAdvance={showAdvance}
         statusText={statusText}
+        typewriterEnabled={judgeDialogueTypingEnabled}
         micActive={
           (phase === "pitch" && roundState.pitchCapture.sourceType === PITCH_SOURCE_TYPES.LIVE_STT) ||
           (phase === "judging" && (judgeMicListening || (chatEnabled && chatInput.trim().length > 0)))
