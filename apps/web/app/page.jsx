@@ -20,6 +20,12 @@ import ScoreBadge from "../components/ScoreBadge";
 import StageScene from "../components/StageScene";
 
 const PITCH_SECONDS = 45;
+const LIVE_REACTION_POLL_MS = 1_200;
+const STAGE_JUDGES = Object.freeze([
+  { id: "cat", name: "Zephyr Valtos" },
+  { id: "dog", name: "Ryo Barkman" },
+  { id: "shark", name: "Mara Finley" }
+]);
 const JUDGE_NAMES = {
   cat: "Zephyr Valtos",
   dog: "Ryo Barkman",
@@ -118,6 +124,11 @@ export default function Page() {
   const hasNavigatedFeedbackRef = useRef(false);
   const roundStateRef = useRef(createRoundState());
   const captureAdapterRef = useRef(null);
+  const liveReactionRequestRef = useRef(false);
+  const liveReactionMetaRef = useRef({
+    lastReactionAtMs: null,
+    lastTranscriptSequence: null
+  });
 
   const [phase, setPhase] = useState("intro");
   const [roundState, setRoundState] = useState(roundStateRef.current);
@@ -133,6 +144,7 @@ export default function Page() {
   const [offerDecisions, setOfferDecisions] = useState({});
   const [acceptedOfferJudgeId, setAcceptedOfferJudgeId] = useState(null);
   const [roundResult, setRoundResult] = useState(null);
+  const [liveReactionEvent, setLiveReactionEvent] = useState(null);
 
   const activeGroup = DIALOGUE_GROUPS[groupIndex] || null;
   const activeLine = activeGroup?.dialogues?.[lineIndex] || null;
@@ -141,6 +153,9 @@ export default function Page() {
   const pitchTranscriptText = joinTranscriptUpdates(roundState.pitchCapture.transcriptUpdates);
   const offersByJudge = Object.fromEntries(roundState.offers.map((offer) => [offer.judgeId, offer]));
   const offerJudgeIds = roundState.offers.map((offer) => offer.judgeId);
+  const liveJudgePresence = Object.fromEntries(
+    (liveReactionEvent?.judges || []).map((judge) => [judge.judgeId, judge])
+  );
 
   const activeSpeakerId =
     phase === "judging" && !chatEnabled && !judgingFinished && activeLine ? activeLine.speakerId : null;
@@ -183,7 +198,7 @@ export default function Page() {
 
   const statusText =
     phase === "pitch" && pitchTimer
-      ? `Source: ${roundState.pitchCapture.sourceType} | Remaining: ${formatTime(pitchTimer.remainingSeconds)}`
+      ? `Source: ${roundState.pitchCapture.sourceType} | Live presence: ${liveReactionEvent?.sourceType || "warming_up"} | Remaining: ${formatTime(pitchTimer.remainingSeconds)}`
       : phase === "pitch-closed"
         ? `Closed: ${roundState.pitchCapture.closeReason || PITCH_CLOSE_REASONS.MANUAL}`
         : phase === "offer-dialogue" && activeOfferLine
@@ -212,6 +227,15 @@ export default function Page() {
   function stopCapture(reason) {
     captureAdapterRef.current?.stop(reason);
     captureAdapterRef.current = null;
+  }
+
+  function resetLiveReactionState() {
+    liveReactionMetaRef.current = {
+      lastReactionAtMs: null,
+      lastTranscriptSequence: null
+    };
+    liveReactionRequestRef.current = false;
+    setLiveReactionEvent(null);
   }
 
   function commitRoundAction(action, options = {}) {
@@ -244,6 +268,7 @@ export default function Page() {
     setOfferDecisions({});
     setAcceptedOfferJudgeId(null);
     setRoundResult(null);
+    resetLiveReactionState();
   }
 
   function moveToFeedbackScreen() {
@@ -297,6 +322,7 @@ export default function Page() {
     setOfferDecisions({});
     setAcceptedOfferJudgeId(null);
     setRoundResult(null);
+    resetLiveReactionState();
 
     const adapter = createPitchCaptureAdapter({
       source: createMockPitchTranscriptSource(),
@@ -497,6 +523,73 @@ export default function Page() {
   }, [roundState.currentState]);
 
   useEffect(() => {
+    if (phase !== "pitch" || roundState.currentState !== ROUND_STATES.PITCH) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function pollLiveReactions() {
+      if (liveReactionRequestRef.current) {
+        return;
+      }
+
+      const transcriptUpdates = roundStateRef.current.pitchCapture.transcriptUpdates;
+      if (!transcriptUpdates.length) {
+        return;
+      }
+
+      liveReactionRequestRef.current = true;
+
+      try {
+        const response = await fetch("/api/live-judge-reactions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            roundId: "local-round",
+            generatedAtMs: Date.now(),
+            presentationOnly: true,
+            preferredSource: "provider",
+            judges: STAGE_JUDGES,
+            transcriptUpdates,
+            lastReactionAtMs: liveReactionMetaRef.current.lastReactionAtMs,
+            lastTranscriptSequence: liveReactionMetaRef.current.lastTranscriptSequence
+          })
+        });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const payload = await response.json();
+
+        if (!cancelled && payload?.emitted && payload?.event) {
+          setLiveReactionEvent(payload.event);
+          liveReactionMetaRef.current = {
+            lastReactionAtMs: payload.event.generatedAtMs,
+            lastTranscriptSequence: payload.event.transcriptSequence
+          };
+        }
+      } catch {
+        // Live pitch reactions stay cosmetic, so the stage keeps the last cue on fetch failure.
+      } finally {
+        liveReactionRequestRef.current = false;
+      }
+    }
+
+    pollLiveReactions();
+    const intervalId = setInterval(pollLiveReactions, LIVE_REACTION_POLL_MS);
+
+    return () => {
+      cancelled = true;
+      liveReactionRequestRef.current = false;
+      clearInterval(intervalId);
+    };
+  }, [phase, roundState.currentState]);
+
+  useEffect(() => {
     if (roundState.currentState !== ROUND_STATES.PITCH || !pitchTimer?.isExpired) {
       return;
     }
@@ -579,6 +672,8 @@ export default function Page() {
       <StageScene
         activeSpeakerId={spotlightSpeakerId}
         judgeReactions={judgeReactions}
+        liveJudgePresence={liveJudgePresence}
+        livePresenceEnabled={phase === "pitch"}
         offersByJudge={offersByJudge}
         offerDecisions={offerDecisions}
         offerSelectionEnabled={phase === "offer-select"}
@@ -606,6 +701,9 @@ export default function Page() {
               <p className="font-display text-xl text-white md:text-2xl">Timed Pitch Capture</p>
               <p className="mt-2 text-sm text-white/90 md:text-base">
                 {pitchTranscriptText || "Listening for transcript updates from the mock capture source..."}
+              </p>
+              <p className="mt-2 text-xs text-white/75 md:text-sm">
+                Live judge presence runs through a separate presentation-only adapter and never changes deterministic scores or round flow.
               </p>
               <p className="mt-2 text-xs text-white/70 md:text-sm">
                 Structured updates are captured into the deterministic round state and will be finalized when the pitch closes.
