@@ -18,6 +18,7 @@ import {
   ROUND_STATES
 } from "@sharktank/game-engine";
 import offerConversation from "./data/mock-offer-conversation.json";
+import DebriefReport from "../components/DebriefReport";
 import ScoreBadge from "../components/ScoreBadge";
 import StageScene from "../components/StageScene";
 
@@ -155,6 +156,9 @@ export default function Page() {
   const [bargainEquity, setBargainEquity] = useState("");
   const [pitchSourceType, setPitchSourceType] = useState(PITCH_SOURCE_TYPES.MOCK);
   const [mediaRecorderAvailable, setMediaRecorderAvailable] = useState(false);
+  const [debriefData, setDebriefData] = useState(null);
+  const [debriefLoading, setDebriefLoading] = useState(false);
+  const debriefFetchedRef = useRef(false);
 
   const activeOfferLine = OFFER_CONVERSATION[offerLineIndex] || null;
   const pitchTimer = getPitchTimerSnapshot(roundState, nowMs);
@@ -276,6 +280,9 @@ export default function Page() {
     setOfferDecisions({});
     setAcceptedOfferJudgeId(null);
     setRoundResult(null);
+    setDebriefData(null);
+    setDebriefLoading(false);
+    debriefFetchedRef.current = false;
     resetLiveReactionState();
   }
 
@@ -329,6 +336,9 @@ export default function Page() {
     setOfferDecisions({});
     setAcceptedOfferJudgeId(null);
     setRoundResult(null);
+    setDebriefData(null);
+    setDebriefLoading(false);
+    debriefFetchedRef.current = false;
     resetLiveReactionState();
 
     const source =
@@ -682,10 +692,41 @@ export default function Page() {
     }
 
     setRoundResult(buildRoundResultSummary(roundState, acceptedOfferJudgeId));
-    if (phase !== "result-animation" && phase !== "result") {
+    if (phase !== "result-animation" && phase !== "result" && phase !== "debrief") {
       setPhase("result-animation");
     }
   }, [acceptedOfferJudgeId, phase, roundState]);
+
+  useEffect(() => {
+    if (roundState.currentState !== ROUND_STATES.ROUND_RESULT || debriefFetchedRef.current) {
+      return;
+    }
+
+    debriefFetchedRef.current = true;
+    setDebriefLoading(true);
+
+    fetch("/api/judge-debrief", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        evaluation: roundState.evaluation,
+        judgeResponses: roundState.judgeResponses,
+        transcript: roundState.transcript,
+        offers: roundState.offers,
+        roundId: "local-round",
+        sessionId: "local-session",
+        founderId: "local-founder"
+      })
+    })
+      .then((res) => res.ok ? res.json() : Promise.reject(new Error("Debrief fetch failed")))
+      .then((data) => {
+        setDebriefData(data.debrief);
+        setDebriefLoading(false);
+      })
+      .catch(() => {
+        setDebriefLoading(false);
+      });
+  }, [roundState.currentState]);
 
   useEffect(() => {
     if (phase !== "result-animation" || !roundResult) {
@@ -699,17 +740,7 @@ export default function Page() {
     return () => clearTimeout(timeoutId);
   }, [phase, roundResult]);
 
-  useEffect(() => {
-    if (phase !== "result" || !roundResult || hasNavigatedFeedbackRef.current) {
-      return;
-    }
-
-    const timeoutId = setTimeout(() => {
-      moveToFeedbackScreen();
-    }, 2200);
-
-    return () => clearTimeout(timeoutId);
-  }, [phase, roundResult]);
+  // Auto-navigate removed: player now chooses between debrief and feedback
 
   useEffect(() => {
     return () => {
@@ -951,17 +982,45 @@ export default function Page() {
             <p className="mt-4 text-xs text-white/70 md:text-sm">
               Decision: {roundResult.decisionType === "accept" ? "Accepted an offer" : "Rejected available offers"}
             </p>
-            <button
-              suppressHydrationWarning
-              type="button"
-              onClick={moveToFeedbackScreen}
-              className="mt-6 rounded-xl border border-white/45 bg-white/10 px-5 py-2 text-sm font-semibold text-white transition hover:bg-white/20 md:text-base"
-            >
-              Continue to Feedback
-            </button>
-            <p className="mt-3 text-xs text-white/70 md:text-sm">Moving to feedback screen...</p>
+            <div className="mt-6 flex flex-col items-center gap-3">
+              <button
+                suppressHydrationWarning
+                type="button"
+                onClick={() => {
+                  if (debriefData) {
+                    commitRoundAction({
+                      type: PLAYER_ACTIONS.REQUEST_DEBRIEF,
+                      payload: { debrief: debriefData }
+                    });
+                    setPhase("debrief");
+                  }
+                }}
+                disabled={!debriefData}
+                className="rounded-xl border border-amber-400/40 bg-amber-500/10 px-5 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40 md:text-base"
+              >
+                {debriefLoading ? "Loading debrief..." : "See what the judges were thinking"}
+              </button>
+              <button
+                suppressHydrationWarning
+                type="button"
+                onClick={moveToFeedbackScreen}
+                className="rounded-xl border border-white/45 bg-white/10 px-5 py-2 text-sm font-semibold text-white transition hover:bg-white/20 md:text-base"
+              >
+                Continue to Feedback
+              </button>
+            </div>
           </div>
         </section>
+      )}
+
+      {phase === "debrief" && (
+        <DebriefReport
+          debrief={debriefData}
+          judgeResponses={roundState.judgeResponses}
+          loading={debriefLoading}
+          onSkip={moveToFeedbackScreen}
+          onProceed={moveToFeedbackScreen}
+        />
       )}
     </main>
   );
