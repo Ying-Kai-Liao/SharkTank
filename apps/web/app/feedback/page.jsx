@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 const JUDGE_NAMES = {
@@ -36,6 +36,35 @@ function FeedbackPageContent() {
   const [feedback, setFeedback] = useState(null);
   const [error, setError] = useState("");
     const [evaluation, setEvaluation] = useState(null);
+  const resultAudioRef = useRef(null);
+
+  function stopResultAudio() {
+    if (!resultAudioRef.current) {
+      return;
+    }
+
+    resultAudioRef.current.pause();
+    resultAudioRef.current.currentTime = 0;
+  }
+
+  function playResultAudio(src) {
+    if (typeof window === "undefined" || !src) {
+      return;
+    }
+
+    if (!resultAudioRef.current) {
+      resultAudioRef.current = new Audio(src);
+      resultAudioRef.current.volume = 0.55;
+    } else if (!resultAudioRef.current.src.endsWith(src)) {
+      stopResultAudio();
+      resultAudioRef.current = new Audio(src);
+      resultAudioRef.current.volume = 0.55;
+    }
+
+    resultAudioRef.current.play().catch(() => {
+      // Browser autoplay rules may block playback until user interaction.
+    });
+  }
 
   useEffect(() => {
     const score = searchParams.get("score") || "0";
@@ -100,6 +129,30 @@ function FeedbackPageContent() {
       cancelled = true;
     };
   }, [searchParams]);
+
+  useEffect(() => {
+    if (loading || error || !feedback) {
+      return;
+    }
+
+    if (feedback.scoreTier === "good") {
+      playResultAudio("/assets/music/Victory.mp3");
+      return;
+    }
+
+    if (feedback.scoreTier === "bad") {
+      playResultAudio("/assets/music/Fail.mp3");
+      return;
+    }
+
+    stopResultAudio();
+  }, [loading, error, feedback]);
+
+  useEffect(() => {
+    return () => {
+      stopResultAudio();
+    };
+  }, []);
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-black text-white">
