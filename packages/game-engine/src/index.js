@@ -17,7 +17,6 @@ export {
   createLivePitchTranscriptSource,
   createMockPitchTranscriptSource,
   createPitchCaptureAdapter,
-  isSpeechRecognitionSupported,
   DEFAULT_MOCK_PITCH_SEGMENTS
 } from "./pitch-capture.js";
 export { evaluateAnswer, evaluatePitch, mergeEvaluations } from "./scoring.js";
