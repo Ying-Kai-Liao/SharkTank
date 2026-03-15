@@ -1,17 +1,21 @@
 import {
   createFinalizedPitch,
   createPitchTimerState,
+  DEFAULT_PANEL_BUDGET,
+  PANEL_EVENT_TYPES,
   PLAYER_ACTIONS,
   PITCH_CLOSE_REASONS,
   PITCH_SOURCE_TYPES,
   ROUND_STATES,
   validateBargainPayload,
   validateJudgeBundle,
+  validatePanelBudget,
   validatePitchStart,
   validatePitchTranscriptUpdate
 } from "../../contracts/src/index.js";
 import { JUDGE_PROFILES } from "./judges.js";
 import { clampBargainTerms, createRevisedOffer, createRoundResult, generateOffers } from "./offers.js";
+import { decideContinuation, selectNextJudge } from "./panel-director.js";
 import { evaluateAnswer, evaluatePitch, mergeEvaluations } from "./scoring.js";
 
 export const DEFAULT_PITCH_DURATION_SECONDS = 45;
@@ -43,6 +47,19 @@ function clonePitchCapture(pitchCapture, updates = {}) {
   };
 }
 
+function clonePanelState(panel) {
+  if (!panel) {
+    return null;
+  }
+
+  return {
+    ...panel,
+    budget: { ...panel.budget },
+    events: [...panel.events],
+    judgeFollowupCounts: { ...panel.judgeFollowupCounts }
+  };
+}
+
 function cloneState(state, updates) {
   return {
     ...state,
@@ -51,7 +68,8 @@ function cloneState(state, updates) {
     judgeResponses: updates.judgeResponses ?? [...state.judgeResponses],
     offers: updates.offers ?? [...state.offers],
     founderActions: updates.founderActions ?? [...state.founderActions],
-    pitchCapture: updates.pitchCapture ?? clonePitchCapture(state.pitchCapture)
+    pitchCapture: updates.pitchCapture ?? clonePitchCapture(state.pitchCapture),
+    panel: updates.panel !== undefined ? updates.panel : clonePanelState(state.panel)
   };
 }
 
@@ -80,6 +98,17 @@ function readActionTime(action, key) {
   return typeof value === "number" && Number.isFinite(value) ? value : Date.now();
 }
 
+export function createPanelStateFromBudget(budget = DEFAULT_PANEL_BUDGET) {
+  return {
+    budget: { ...budget },
+    turn: 0,
+    events: [],
+    judgeFollowupCounts: {},
+    awaitingAnswer: false,
+    closed: false
+  };
+}
+
 export function createInitialGameState(options = {}) {
   const pitchDurationSeconds = Number.isInteger(options.pitchDurationSeconds) && options.pitchDurationSeconds > 0
     ? options.pitchDurationSeconds
@@ -97,7 +126,8 @@ export function createInitialGameState(options = {}) {
     roundResult: null,
     transcript: [],
     founderActions: [],
-    pitchCapture: createPitchCaptureState(pitchDurationSeconds)
+    pitchCapture: createPitchCaptureState(pitchDurationSeconds),
+    panel: null
   };
 }
 
@@ -137,6 +167,11 @@ export function getAllowedActions(state, options = {}) {
       }
       return followUpActions;
     }
+    case ROUND_STATES.PANEL:
+      if (state.panel?.awaitingAnswer) {
+        return [PLAYER_ACTIONS.SUBMIT_ANSWER];
+      }
+      return [PLAYER_ACTIONS.ADVANCE_PANEL_TURN];
     case ROUND_STATES.PLAYER_DECISION:
       return state.offers.length
         ? [PLAYER_ACTIONS.ACCEPT_DEAL, PLAYER_ACTIONS.REJECT_DEAL, PLAYER_ACTIONS.SUBMIT_BARGAIN]
@@ -305,6 +340,26 @@ export function applyAction(state, action) {
       if (state.currentState === ROUND_STATES.PITCH_CLOSED) {
         validateJudgeBundle(action.payload);
         const judgeResponses = action.payload.judgeResponses;
+        const usePanel = action.payload.usePanel !== false;
+
+        if (usePanel) {
+          const panelBudget = action.payload.panelBudget || DEFAULT_PANEL_BUDGET;
+          validatePanelBudget(panelBudget);
+
+          return cloneState(state, {
+            currentState: ROUND_STATES.PANEL,
+            judgeResponses,
+            leadQuestion: action.payload.leadQuestion,
+            panel: createPanelStateFromBudget(panelBudget),
+            transcript: [
+              ...state.transcript,
+              ...judgeResponses.map((response) => ({
+                speaker: response.judgeName,
+                text: response.shortReaction
+              }))
+            ]
+          });
+        }
 
         return cloneState(state, {
           currentState: ROUND_STATES.JUDGE_REACTIONS,
@@ -338,7 +393,95 @@ export function applyAction(state, action) {
 
       throw new InvalidActionError(`Cannot advance from ${state.currentState}.`);
     }
+    case PLAYER_ACTIONS.ADVANCE_PANEL_TURN: {
+      assertAction(state.currentState, ROUND_STATES.PANEL, action.type);
+
+      if (!state.panel || state.panel.closed) {
+        throw new InvalidActionError("Panel is not active.");
+      }
+
+      if (state.panel.awaitingAnswer) {
+        throw new InvalidActionError("Cannot advance panel turn while awaiting a founder answer.");
+      }
+
+      const decision = decideContinuation(state.panel, state.judgeResponses);
+
+      if (decision.decision === "close") {
+        const closeEvent = {
+          type: PANEL_EVENT_TYPES.PANEL_CLOSED,
+          turn: state.panel.turn,
+          reason: decision.reason
+        };
+        const evaluation = state.evaluation;
+        const offers = generateOffers(evaluation, JUDGE_PROFILES);
+
+        return cloneState(state, {
+          currentState: ROUND_STATES.DEALS,
+          offers,
+          panel: {
+            ...state.panel,
+            events: [...state.panel.events, closeEvent],
+            closed: true
+          }
+        });
+      }
+
+      const nextJudge = selectNextJudge(state.panel, state.judgeResponses);
+      const questionText = action.payload?.question || nextJudge.question || "Tell me more about your approach.";
+      const nextTurn = state.panel.turn + 1;
+      const questionEvent = {
+        type: PANEL_EVENT_TYPES.JUDGE_QUESTION,
+        turn: nextTurn,
+        judgeId: nextJudge.judgeId,
+        judgeName: nextJudge.judgeName,
+        text: questionText
+      };
+
+      return cloneState(state, {
+        panel: {
+          ...state.panel,
+          turn: nextTurn,
+          events: [...state.panel.events, questionEvent],
+          awaitingAnswer: true,
+          judgeFollowupCounts: {
+            ...state.panel.judgeFollowupCounts,
+            [nextJudge.judgeId]: (state.panel.judgeFollowupCounts[nextJudge.judgeId] || 0) + 1
+          }
+        },
+        transcript: appendTranscript(state, nextJudge.judgeName, questionText)
+      });
+    }
     case PLAYER_ACTIONS.SUBMIT_ANSWER: {
+      if (state.currentState === ROUND_STATES.PANEL) {
+        if (!state.panel || !state.panel.awaitingAnswer) {
+          throw new InvalidActionError("Panel is not awaiting a founder answer.");
+        }
+
+        const answer = action.payload?.answer?.trim();
+        if (!answer) {
+          throw new InvalidActionError("A follow-up answer is required.");
+        }
+
+        const answerBoost = evaluateAnswer(answer);
+        const evaluation = mergeEvaluations(state.evaluation, answerBoost);
+        const answerEvent = {
+          type: PANEL_EVENT_TYPES.FOUNDER_ANSWER,
+          turn: state.panel.turn,
+          text: answer
+        };
+
+        return cloneState(state, {
+          answer,
+          evaluation,
+          panel: {
+            ...state.panel,
+            events: [...state.panel.events, answerEvent],
+            awaitingAnswer: false
+          },
+          transcript: appendTranscript(state, "Founder", answer)
+        });
+      }
+
       assertAction(state.currentState, ROUND_STATES.FOLLOW_UP, action.type);
       const answer = action.payload?.answer?.trim();
       const answerBoost = evaluateAnswer(answer);
