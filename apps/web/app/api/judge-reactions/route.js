@@ -7,7 +7,7 @@ const FALLBACK_REACTIONS = {
 };
 
 function sanitizeReaction(value) {
-  if (value === "positive" || value === "negative" || value === "neutral") {
+  if (value === "positive" || value === "negative" || value === "neutral" || value === "surprised") {
     return value;
   }
 

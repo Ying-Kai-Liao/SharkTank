@@ -112,7 +112,7 @@ test("POST /api/judge-reactions returns normalized reaction set", async () => {
   assert.equal(typeof payload.reactions, "object");
 
   for (const judgeId of ["cat", "dog", "shark"]) {
-    assert.ok(["positive", "negative", "neutral"].includes(payload.reactions[judgeId]));
+    assert.ok(["positive", "negative", "neutral", "surprised"].includes(payload.reactions[judgeId]));
   }
 });
 

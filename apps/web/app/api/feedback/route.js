@@ -1,7 +1,19 @@
 import feedbackMatrix from "../../data/mock-feedback-results.json";
 
 function sanitizeDecisionType(value) {
-  return value === "accept" ? "accept" : "disaccept";
+  if (value === "accept") {
+    return "accept";
+  }
+
+  if (value === "game_over") {
+    return "game_over";
+  }
+
+  return "disaccept";
+}
+
+function toFeedbackMatrixDecision(decisionType) {
+  return decisionType === "accept" ? "accept" : "disaccept";
 }
 
 function sanitizeTier(value) {
@@ -13,7 +25,7 @@ function sanitizeTier(value) {
 }
 
 function pickParagraph(decisionType, scoreTier) {
-  const paragraphPool = feedbackMatrix?.paragraphs?.[decisionType]?.[scoreTier] || [];
+  const paragraphPool = feedbackMatrix?.paragraphs?.[toFeedbackMatrixDecision(decisionType)]?.[scoreTier] || [];
   if (Array.isArray(paragraphPool) && paragraphPool.length > 0) {
     return paragraphPool[0];
   }

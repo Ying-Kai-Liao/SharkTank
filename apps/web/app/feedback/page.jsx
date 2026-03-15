@@ -11,7 +11,15 @@ const JUDGE_NAMES = {
 };
 
 function formatDecision(decisionType) {
-  return decisionType === "accept" ? "Accepted Offer" : "Disaccepted Offers";
+  if (decisionType === "accept") {
+    return "Accepted Offer";
+  }
+
+  if (decisionType === "game_over") {
+    return "Game Over (No Offers)";
+  }
+
+  return "Rejected Offers";
 }
 
 function FeedbackPageContent() {
@@ -23,7 +31,7 @@ function FeedbackPageContent() {
   useEffect(() => {
     const score = searchParams.get("score") || "0";
     const scoreTier = searchParams.get("scoreTier") || "medium";
-    const decisionType = searchParams.get("decisionType") || "disaccept";
+    const decisionType = searchParams.get("decisionType") || "reject";
     const acceptedJudgeId = searchParams.get("acceptedJudgeId") || "";
 
     let cancelled = false;

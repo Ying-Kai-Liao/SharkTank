@@ -33,3 +33,5 @@ __pycache__/
 .gemini/
 skills-lock.json
 local-skills
+# Next.js build output
+.next/
