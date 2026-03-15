@@ -1,16 +1,21 @@
 import {
   createFinalizedPitch,
   createPitchTimerState,
+  DEFAULT_PANEL_BUDGET,
+  PANEL_EVENT_TYPES,
   PLAYER_ACTIONS,
   PITCH_CLOSE_REASONS,
   PITCH_SOURCE_TYPES,
   ROUND_STATES,
+  validateBargainPayload,
   validateJudgeBundle,
+  validatePanelBudget,
   validatePitchStart,
   validatePitchTranscriptUpdate
 } from "../../contracts/src/index.js";
 import { JUDGE_PROFILES } from "./judges.js";
-import { createRoundResult, generateOffers } from "./offers.js";
+import { clampBargainTerms, createRevisedOffer, createRoundResult, generateOffers } from "./offers.js";
+import { decideContinuation, selectNextJudge } from "./panel-director.js";
 import { evaluateAnswer, evaluatePitch, mergeEvaluations } from "./scoring.js";
 
 export const DEFAULT_PITCH_DURATION_SECONDS = 45;
@@ -42,6 +47,19 @@ function clonePitchCapture(pitchCapture, updates = {}) {
   };
 }
 
+function clonePanelState(panel) {
+  if (!panel) {
+    return null;
+  }
+
+  return {
+    ...panel,
+    budget: { ...panel.budget },
+    events: [...panel.events],
+    judgeFollowupCounts: { ...panel.judgeFollowupCounts }
+  };
+}
+
 function cloneState(state, updates) {
   return {
     ...state,
@@ -49,8 +67,14 @@ function cloneState(state, updates) {
     transcript: updates.transcript ?? [...state.transcript],
     judgeResponses: updates.judgeResponses ?? [...state.judgeResponses],
     offers: updates.offers ?? [...state.offers],
-    pitchCapture: updates.pitchCapture ?? clonePitchCapture(state.pitchCapture)
+    founderActions: updates.founderActions ?? [...state.founderActions],
+    pitchCapture: updates.pitchCapture ?? clonePitchCapture(state.pitchCapture),
+    panel: updates.panel !== undefined ? updates.panel : clonePanelState(state.panel)
   };
+}
+
+function appendFounderAction(state, action) {
+  return [...state.founderActions, action];
 }
 
 function appendTranscript(state, speaker, text) {
@@ -74,6 +98,17 @@ function readActionTime(action, key) {
   return typeof value === "number" && Number.isFinite(value) ? value : Date.now();
 }
 
+export function createPanelStateFromBudget(budget = DEFAULT_PANEL_BUDGET) {
+  return {
+    budget: { ...budget },
+    turn: 0,
+    events: [],
+    judgeFollowupCounts: {},
+    awaitingAnswer: false,
+    closed: false
+  };
+}
+
 export function createInitialGameState(options = {}) {
   const pitchDurationSeconds = Number.isInteger(options.pitchDurationSeconds) && options.pitchDurationSeconds > 0
     ? options.pitchDurationSeconds
@@ -90,7 +125,9 @@ export function createInitialGameState(options = {}) {
     acceptedDealId: null,
     roundResult: null,
     transcript: [],
-    pitchCapture: createPitchCaptureState(pitchDurationSeconds)
+    founderActions: [],
+    pitchCapture: createPitchCaptureState(pitchDurationSeconds),
+    panel: null
   };
 }
 
@@ -123,11 +160,21 @@ export function getAllowedActions(state, options = {}) {
     case ROUND_STATES.JUDGE_REACTIONS:
     case ROUND_STATES.DEALS:
       return [PLAYER_ACTIONS.ADVANCE];
-    case ROUND_STATES.FOLLOW_UP:
-      return [PLAYER_ACTIONS.SUBMIT_ANSWER];
+    case ROUND_STATES.FOLLOW_UP: {
+      const followUpActions = [PLAYER_ACTIONS.SUBMIT_ANSWER, PLAYER_ACTIONS.DECLINE_QUESTION];
+      if (state.offers.length) {
+        followUpActions.push(PLAYER_ACTIONS.SUBMIT_BARGAIN);
+      }
+      return followUpActions;
+    }
+    case ROUND_STATES.PANEL:
+      if (state.panel?.awaitingAnswer) {
+        return [PLAYER_ACTIONS.SUBMIT_ANSWER];
+      }
+      return [PLAYER_ACTIONS.ADVANCE_PANEL_TURN];
     case ROUND_STATES.PLAYER_DECISION:
       return state.offers.length
-        ? [PLAYER_ACTIONS.ACCEPT_DEAL, PLAYER_ACTIONS.REJECT_DEAL]
+        ? [PLAYER_ACTIONS.ACCEPT_DEAL, PLAYER_ACTIONS.REJECT_DEAL, PLAYER_ACTIONS.SUBMIT_BARGAIN]
         : [PLAYER_ACTIONS.ADVANCE];
     default:
       return [];
@@ -248,6 +295,7 @@ export function applyAction(state, action) {
         acceptedDealId: null,
         roundResult: null,
         transcript: [],
+        founderActions: [],
         pitchCapture: {
           durationSeconds: startPayload.durationSeconds,
           sourceType: startPayload.sourceType,
@@ -292,6 +340,26 @@ export function applyAction(state, action) {
       if (state.currentState === ROUND_STATES.PITCH_CLOSED) {
         validateJudgeBundle(action.payload);
         const judgeResponses = action.payload.judgeResponses;
+        const usePanel = action.payload.usePanel !== false;
+
+        if (usePanel) {
+          const panelBudget = action.payload.panelBudget || DEFAULT_PANEL_BUDGET;
+          validatePanelBudget(panelBudget);
+
+          return cloneState(state, {
+            currentState: ROUND_STATES.PANEL,
+            judgeResponses,
+            leadQuestion: action.payload.leadQuestion,
+            panel: createPanelStateFromBudget(panelBudget),
+            transcript: [
+              ...state.transcript,
+              ...judgeResponses.map((response) => ({
+                speaker: response.judgeName,
+                text: response.shortReaction
+              }))
+            ]
+          });
+        }
 
         return cloneState(state, {
           currentState: ROUND_STATES.JUDGE_REACTIONS,
@@ -325,7 +393,95 @@ export function applyAction(state, action) {
 
       throw new InvalidActionError(`Cannot advance from ${state.currentState}.`);
     }
+    case PLAYER_ACTIONS.ADVANCE_PANEL_TURN: {
+      assertAction(state.currentState, ROUND_STATES.PANEL, action.type);
+
+      if (!state.panel || state.panel.closed) {
+        throw new InvalidActionError("Panel is not active.");
+      }
+
+      if (state.panel.awaitingAnswer) {
+        throw new InvalidActionError("Cannot advance panel turn while awaiting a founder answer.");
+      }
+
+      const decision = decideContinuation(state.panel, state.judgeResponses);
+
+      if (decision.decision === "close") {
+        const closeEvent = {
+          type: PANEL_EVENT_TYPES.PANEL_CLOSED,
+          turn: state.panel.turn,
+          reason: decision.reason
+        };
+        const evaluation = state.evaluation;
+        const offers = generateOffers(evaluation, JUDGE_PROFILES);
+
+        return cloneState(state, {
+          currentState: ROUND_STATES.DEALS,
+          offers,
+          panel: {
+            ...state.panel,
+            events: [...state.panel.events, closeEvent],
+            closed: true
+          }
+        });
+      }
+
+      const nextJudge = selectNextJudge(state.panel, state.judgeResponses);
+      const questionText = action.payload?.question || nextJudge.question || "Tell me more about your approach.";
+      const nextTurn = state.panel.turn + 1;
+      const questionEvent = {
+        type: PANEL_EVENT_TYPES.JUDGE_QUESTION,
+        turn: nextTurn,
+        judgeId: nextJudge.judgeId,
+        judgeName: nextJudge.judgeName,
+        text: questionText
+      };
+
+      return cloneState(state, {
+        panel: {
+          ...state.panel,
+          turn: nextTurn,
+          events: [...state.panel.events, questionEvent],
+          awaitingAnswer: true,
+          judgeFollowupCounts: {
+            ...state.panel.judgeFollowupCounts,
+            [nextJudge.judgeId]: (state.panel.judgeFollowupCounts[nextJudge.judgeId] || 0) + 1
+          }
+        },
+        transcript: appendTranscript(state, nextJudge.judgeName, questionText)
+      });
+    }
     case PLAYER_ACTIONS.SUBMIT_ANSWER: {
+      if (state.currentState === ROUND_STATES.PANEL) {
+        if (!state.panel || !state.panel.awaitingAnswer) {
+          throw new InvalidActionError("Panel is not awaiting a founder answer.");
+        }
+
+        const answer = action.payload?.answer?.trim();
+        if (!answer) {
+          throw new InvalidActionError("A follow-up answer is required.");
+        }
+
+        const answerBoost = evaluateAnswer(answer);
+        const evaluation = mergeEvaluations(state.evaluation, answerBoost);
+        const answerEvent = {
+          type: PANEL_EVENT_TYPES.FOUNDER_ANSWER,
+          turn: state.panel.turn,
+          text: answer
+        };
+
+        return cloneState(state, {
+          answer,
+          evaluation,
+          panel: {
+            ...state.panel,
+            events: [...state.panel.events, answerEvent],
+            awaitingAnswer: false
+          },
+          transcript: appendTranscript(state, "Founder", answer)
+        });
+      }
+
       assertAction(state.currentState, ROUND_STATES.FOLLOW_UP, action.type);
       const answer = action.payload?.answer?.trim();
       const answerBoost = evaluateAnswer(answer);
@@ -357,6 +513,68 @@ export function applyAction(state, action) {
       }
 
       return resolveDealRejection(state);
+    }
+    case PLAYER_ACTIONS.SUBMIT_BARGAIN: {
+      if (state.currentState !== ROUND_STATES.FOLLOW_UP && state.currentState !== ROUND_STATES.PLAYER_DECISION) {
+        throw new InvalidActionError(`Cannot use "${action.type}" while round state is ${state.currentState}.`);
+      }
+
+      if (!state.offers.length) {
+        throw new InvalidActionError("Cannot bargain when no offers exist.");
+      }
+
+      validateBargainPayload(action.payload);
+
+      const targetOffer = state.offers.find((offer) => offer.id === action.payload.offerId);
+      if (!targetOffer) {
+        throw new InvalidActionError("The referenced offer does not exist.");
+      }
+
+      const clampedTerms = clampBargainTerms(targetOffer, action.payload.terms);
+      const revisedOffer = createRevisedOffer(targetOffer, clampedTerms);
+      const updatedOffers = state.offers.map((offer) =>
+        offer.id === targetOffer.id ? revisedOffer : offer
+      );
+
+      const founderAction = { type: "bargain", offerId: targetOffer.id, terms: clampedTerms };
+
+      return cloneState(state, {
+        offers: updatedOffers,
+        transcript: appendTranscript(
+          state,
+          "Founder",
+          `Founder proposes revised terms: $${clampedTerms.amount.toLocaleString()} for ${clampedTerms.equity}% equity.`
+        ),
+        founderActions: appendFounderAction(state, founderAction)
+      });
+    }
+    case PLAYER_ACTIONS.DECLINE_QUESTION: {
+      assertAction(state.currentState, ROUND_STATES.FOLLOW_UP, action.type);
+
+      const declineAction = { type: "decline" };
+      const offers = generateOffers(state.evaluation, JUDGE_PROFILES);
+
+      if (offers.length) {
+        return cloneState(state, {
+          currentState: ROUND_STATES.DEALS,
+          offers,
+          transcript: appendTranscript(state, "Founder", "Founder declined to answer the question."),
+          founderActions: appendFounderAction(state, declineAction)
+        });
+      }
+
+      const roundResult = createRoundResult({
+        evaluation: state.evaluation,
+        offers: [],
+        decision: { type: "no_offer" }
+      });
+
+      return cloneState(state, {
+        currentState: ROUND_STATES.ROUND_RESULT,
+        roundResult,
+        transcript: appendTranscript(state, "Founder", "Founder declined to answer. No offers were generated."),
+        founderActions: appendFounderAction(state, declineAction)
+      });
     }
     default:
       throw new InvalidActionError(`Unknown action "${action.type}".`);

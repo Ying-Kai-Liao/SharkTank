@@ -144,7 +144,12 @@ export function isJudgeServiceInputShape(value) {
     value.judges.every(isJudgeProfileShape) &&
     Array.isArray(value.transcript) &&
     value.transcript.every(isTranscriptEntryShape) &&
-    isDiscussionPolicyShape(discussionPolicy)
+    isDiscussionPolicyShape(discussionPolicy) &&
+    (value.turnNumber === undefined ||
+      (Number.isInteger(value.turnNumber) && value.turnNumber >= 0)) &&
+    (value.founderActions === undefined ||
+      (Array.isArray(value.founderActions) &&
+        value.founderActions.every(isTranscriptEntryShape)))
   );
 }
 
@@ -157,7 +162,9 @@ export function createJudgeServiceInput(input) {
     evaluation: input?.evaluation ?? null,
     judges: Array.isArray(input?.judges) ? input.judges : [],
     transcript: Array.isArray(input?.transcript) ? input.transcript : [],
-    discussionPolicy: normalizeDiscussionPolicy(input?.discussionPolicy)
+    discussionPolicy: normalizeDiscussionPolicy(input?.discussionPolicy),
+    turnNumber: Number.isInteger(input?.turnNumber) && input.turnNumber >= 0 ? input.turnNumber : 0,
+    founderActions: Array.isArray(input?.founderActions) ? input.founderActions : []
   };
 
   validateJudgeServiceInput(normalized);
@@ -194,6 +201,60 @@ export function isJudgeResponseShape(value) {
   }
 
   return value.rationaleTags.every(hasText);
+}
+
+export const JUDGE_TURN_INTENTS = Object.freeze([
+  "ask",
+  "wait",
+  "offer",
+  "revise",
+  "support",
+  "drop_out"
+]);
+
+export const JUDGE_VISIBLE_STATUSES = Object.freeze([
+  "evaluating",
+  "waiting",
+  "active",
+  "offering",
+  "supportive",
+  "out"
+]);
+
+export function isJudgeTurnIntentShape(value) {
+  return typeof value === "string" && JUDGE_TURN_INTENTS.includes(value);
+}
+
+export function isJudgeVisibleStatusShape(value) {
+  return typeof value === "string" && JUDGE_VISIBLE_STATUSES.includes(value);
+}
+
+export function isJudgeTurnOutputShape(value) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  if (!hasText(value.judgeId)) {
+    return false;
+  }
+
+  if (!isJudgeTurnIntentShape(value.intent)) {
+    return false;
+  }
+
+  if (!isJudgeVisibleStatusShape(value.status)) {
+    return false;
+  }
+
+  if (value.dialogue !== undefined && typeof value.dialogue !== "string") {
+    return false;
+  }
+
+  if (value.question !== undefined && typeof value.question !== "string") {
+    return false;
+  }
+
+  return true;
 }
 
 export function validateJudgeBundle(bundle) {

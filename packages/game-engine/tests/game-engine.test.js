@@ -119,7 +119,7 @@ test("manual pitch close preserves remaining time and can advance into reactions
 
   state = applyAction(state, {
     type: PLAYER_ACTIONS.ADVANCE,
-    payload: createJudgeBundle(state.evaluation)
+    payload: { ...createJudgeBundle(state.evaluation), usePanel: false }
   });
 
   assert.equal(state.currentState, ROUND_STATES.JUDGE_REACTIONS);
@@ -155,7 +155,7 @@ test("late transcript updates are rejected after pitch closure without mutating 
   assert.deepEqual(state, snapshot);
 });
 
-test("a full local round still completes from timed pitch capture to deal acceptance", () => {
+test("a full local round still completes from timed pitch capture to deal acceptance (legacy flow)", () => {
   let state = createInitialGameState({ pitchDurationSeconds: 12 });
   state = startPitch(state, 2_000, 12);
   state = submitPitchUpdate(state, {
@@ -179,7 +179,7 @@ test("a full local round still completes from timed pitch capture to deal accept
 
   state = applyAction(state, {
     type: PLAYER_ACTIONS.ADVANCE,
-    payload: createJudgeBundle(state.evaluation)
+    payload: { ...createJudgeBundle(state.evaluation), usePanel: false }
   });
   assert.equal(state.currentState, ROUND_STATES.JUDGE_REACTIONS);
 

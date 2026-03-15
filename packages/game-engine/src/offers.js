@@ -1,4 +1,4 @@
-import { EVALUATION_DIMENSIONS } from "../../contracts/src/index.js";
+import { BARGAIN_LIMITS, EVALUATION_DIMENSIONS } from "../../contracts/src/index.js";
 
 function roundCurrency(value) {
   return Math.round(value / 5000) * 5000;
@@ -44,6 +44,29 @@ export function generateOffers(evaluation, judges) {
         rationale: `${entry.judge.name} is leaning on ${topDimension.replace("_", " ")} and wants proof the execution holds.`
       };
     });
+}
+
+export function clampBargainTerms(originalOffer, proposedTerms) {
+  const minAmount = Math.round(originalOffer.amount * (1 + BARGAIN_LIMITS.minAmountChangePct));
+  const maxAmount = Math.round(originalOffer.amount * (1 + BARGAIN_LIMITS.maxAmountChangePct));
+  const minEquity = Math.max(1, originalOffer.equity + BARGAIN_LIMITS.minEquityDelta);
+  const maxEquity = Math.min(100, originalOffer.equity + BARGAIN_LIMITS.maxEquityDelta);
+
+  return {
+    amount: Math.max(minAmount, Math.min(maxAmount, Math.round(proposedTerms.amount))),
+    equity: Math.max(minEquity, Math.min(maxEquity, Math.round(proposedTerms.equity)))
+  };
+}
+
+export function createRevisedOffer(originalOffer, clampedTerms) {
+  return {
+    ...originalOffer,
+    id: `${originalOffer.id}-revised`,
+    amount: clampedTerms.amount,
+    equity: clampedTerms.equity,
+    revised: true,
+    originalOfferId: originalOffer.id
+  };
 }
 
 export function createRoundResult({ evaluation, offers, decision }) {

@@ -1,6 +1,6 @@
 import { createJudgeServiceInput } from "../../../packages/contracts/src/index.js";
 import { loadAiServiceConfig, normalizeAiServiceConfig } from "./config.js";
-import { createJudgeOrchestrationGraph } from "./graph.js";
+import { createJudgeOrchestrationGraph, createJudgeReplanGraph } from "./graph.js";
 import { InMemoryJudgeMemoryStore } from "./memory.js";
 import { createJudgeProvider } from "./providers.js";
 
@@ -96,6 +96,50 @@ export function createJudgeOrchestrationService(options = {}) {
       }
 
       return result.finalBundle;
+    },
+
+    async replan(input, runOptions = {}) {
+      const request = createJudgeServiceInput({
+        ...input,
+        discussionPolicy: {
+          maxRounds: config.deliberationMaxRounds,
+          disagreementThreshold: config.disagreementThreshold,
+          minimumQuestionVariance: config.minimumQuestionVariance,
+          maxPeerQueriesPerRound: config.maxPeerQueriesPerRound,
+          maxPeerTargets: config.maxPeerTargets,
+          ...(input?.discussionPolicy ?? {})
+        }
+      });
+      const graph = createJudgeReplanGraph();
+      const result = await graph.invoke(
+        {
+          request,
+          config,
+          provider,
+          memoryStore,
+          replanMode: true,
+          turnNumber: request.turnNumber,
+          founderActions: request.founderActions
+        },
+        {
+          recursionLimit: Math.max(16, request.discussionPolicy.maxRounds * 6 + 10)
+        }
+      );
+
+      if (runOptions.includeDebug) {
+        return {
+          turnIntents: result.turnIntents,
+          debug: {
+            provider: provider.name,
+            usedPlaceholderProvider: Boolean(provider.placeholder),
+            turnNumber: result.turnNumber,
+            founderActions: result.founderActions,
+            resilience: buildResilienceDebug(result)
+          }
+        };
+      }
+
+      return { turnIntents: result.turnIntents };
     }
   };
 }

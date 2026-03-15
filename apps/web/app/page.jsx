@@ -7,14 +7,15 @@ import {
   createInitialGameState,
   createMockPitchTranscriptSource,
   createPitchCaptureAdapter,
+  getAllowedActions,
   getPitchTimerSnapshot,
   JUDGE_PROFILES,
+  PANEL_EVENT_TYPES,
   PLAYER_ACTIONS,
   PITCH_CLOSE_REASONS,
   PITCH_SOURCE_TYPES,
   ROUND_STATES
 } from "@sharktank/game-engine";
-import judgeDialogues from "./data/mock-judge-dialogues.json";
 import offerConversation from "./data/mock-offer-conversation.json";
 import ScoreBadge from "../components/ScoreBadge";
 import StageScene from "../components/StageScene";
@@ -31,7 +32,11 @@ const JUDGE_NAMES = {
   dog: "Ryo Barkman",
   shark: "Mara Finley"
 };
-const DIALOGUE_GROUPS = judgeDialogues.groups || [];
+const JUDGE_TO_STAGE = {
+  rhea: "cat",
+  marco: "dog",
+  tori: "shark"
+};
 const OFFER_CONVERSATION = offerConversation.conversation || [];
 const RESULT_ANIMATION_MS = 1800;
 const COUNTDOWN_START = 3;
@@ -154,8 +159,6 @@ export default function Page() {
   const [phase, setPhase] = useState("intro");
   const [roundState, setRoundState] = useState(roundStateRef.current);
   const [nowMs, setNowMs] = useState(Date.now());
-  const [groupIndex, setGroupIndex] = useState(0);
-  const [lineIndex, setLineIndex] = useState(0);
   const [chatEnabled, setChatEnabled] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatHistory, setChatHistory] = useState([]);
@@ -167,20 +170,32 @@ export default function Page() {
   const [roundResult, setRoundResult] = useState(null);
   const [liveReactionEvent, setLiveReactionEvent] = useState(null);
   const [countdownValue, setCountdownValue] = useState(null);
+  const [bargainMode, setBargainMode] = useState(false);
+  const [bargainOfferId, setBargainOfferId] = useState(null);
+  const [bargainAmount, setBargainAmount] = useState("");
+  const [bargainEquity, setBargainEquity] = useState("");
 
-  const activeGroup = DIALOGUE_GROUPS[groupIndex] || null;
-  const activeLine = activeGroup?.dialogues?.[lineIndex] || null;
   const activeOfferLine = OFFER_CONVERSATION[offerLineIndex] || null;
   const pitchTimer = getPitchTimerSnapshot(roundState, nowMs);
   const pitchTranscriptText = joinTranscriptUpdates(roundState.pitchCapture.transcriptUpdates);
   const offersByJudge = Object.fromEntries(roundState.offers.map((offer) => [offer.judgeId, offer]));
   const offerJudgeIds = roundState.offers.map((offer) => offer.judgeId);
+  const allowedActions = getAllowedActions(roundState, { nowMs });
   const liveJudgePresence = Object.fromEntries(
     (liveReactionEvent?.judges || []).map((judge) => [judge.judgeId, judge])
   );
 
+  const panelEvents = roundState.panel?.events || [];
+  const latestPanelQuestion = [...panelEvents]
+    .reverse()
+    .find((event) => event.type === PANEL_EVENT_TYPES.JUDGE_QUESTION);
+  const panelAwaitingAnswer = roundState.panel?.awaitingAnswer || false;
+  const panelTurn = roundState.panel?.turn || 0;
+  const panelMaxTurns = roundState.panel?.budget?.maxTurns || 0;
+  const panelSpeakerStageId = latestPanelQuestion ? JUDGE_TO_STAGE[latestPanelQuestion.judgeId] || null : null;
+
   const activeSpeakerId =
-    phase === "judging" && !chatEnabled && !judgingFinished && activeLine ? activeLine.speakerId : null;
+    phase === "judging" && panelAwaitingAnswer && panelSpeakerStageId ? panelSpeakerStageId : null;
   const activeOfferSpeakerId = phase === "offer-dialogue" && activeOfferLine ? activeOfferLine.speakerId : null;
   const spotlightSpeakerId = activeSpeakerId || activeOfferSpeakerId;
 
@@ -190,7 +205,8 @@ export default function Page() {
 
   const speakerName =
     phase === "offer-dialogue" && activeOfferSpeakerId ? JUDGE_NAMES[activeOfferSpeakerId] || "Judge"
-      : phase === "judging" && activeSpeakerId ? JUDGE_NAMES[activeSpeakerId] || "Judge"
+      : phase === "judging" && panelAwaitingAnswer && panelSpeakerStageId
+        ? JUDGE_NAMES[panelSpeakerStageId] || "Judge"
         : phase === "judging" && chatEnabled ? "Your Turn"
           : phase === "offer-select" ? "Offer Decision"
             : phase === "pitch" ? "Pitch Capture"
@@ -207,8 +223,9 @@ export default function Page() {
             ? "No judges made an offer this round."
             : phase === "offer-select"
               ? "Hover each judge to inspect the offer card, then accept one or reject them all."
-              : phase === "judging" && !chatEnabled && activeLine ? activeLine.text
-                : phase === "judging"
+              : phase === "judging" && panelAwaitingAnswer && latestPanelQuestion
+                ? latestPanelQuestion.text
+                : phase === "judging" && chatEnabled
                   ? "Reply to the judges to continue the round."
                   : phase === "pitch" && pitchTranscriptText
                     ? pitchTranscriptText
@@ -229,17 +246,13 @@ export default function Page() {
             ? "Deal locked. You can still hover judges to inspect the cards."
             : phase === "offer-select"
               ? `Offers available: ${offerJudgeIds.length} | Rejected: ${rejectedOfferCount}`
-              : phase === "judging" && !chatEnabled && activeGroup
-                ? `Group ${groupIndex + 1}/${DIALOGUE_GROUPS.length} | Dialogue ${lineIndex + 1}/${activeGroup.dialogues.length}`
-                : phase === "judging" && !judgingFinished
-                  ? "Send your reply. The next scripted judge group will appear after your answer."
-                  : phase === "judging" && judgingFinished
-                    ? `Player replies sent: ${chatHistory.length}`
-                    : "";
+              : phase === "judging" && panelTurn > 0
+                ? `Panel turn ${panelTurn}/${panelMaxTurns} | ${panelAwaitingAnswer ? "Awaiting your answer" : "Judge deliberating..."}`
+                : phase === "judging" && judgingFinished
+                  ? `Player replies sent: ${chatHistory.length}`
+                  : "";
 
-  const showAdvance =
-    (phase === "judging" && !chatEnabled && Boolean(activeLine)) ||
-    (phase === "offer-dialogue" && Boolean(activeOfferLine));
+  const showAdvance = phase === "offer-dialogue" && Boolean(activeOfferLine);
 
   function playAudioEffect(audioRef) {
     const audio = audioRef.current;
@@ -380,14 +393,6 @@ export default function Page() {
   }
 
   function initializeJudgingFlow() {
-    if (!DIALOGUE_GROUPS.length) {
-      setJudgingFinished(true);
-      setChatEnabled(true);
-      return;
-    }
-
-    setGroupIndex(0);
-    setLineIndex(0);
     setChatEnabled(false);
     setJudgingFinished(false);
     setJudgeReactions({});
@@ -461,6 +466,17 @@ export default function Page() {
     setRoundStateValue(startedState);
     setNowMs(startedAtMs);
     setPhase("pitch");
+    setCountdownValue(null);
+    setChatEnabled(false);
+    setChatInput("");
+    setChatHistory([]);
+    setJudgingFinished(false);
+    setJudgeReactions({});
+    setOfferLineIndex(0);
+    setOfferDecisions({});
+    setAcceptedOfferJudgeId(null);
+    setRoundResult(null);
+    resetLiveReactionState();
 
     const adapter = createPitchCaptureAdapter({
       source: createMockPitchTranscriptSource(),
@@ -497,20 +513,6 @@ export default function Page() {
   }
 
   function handleAdvanceDialogue() {
-    if (phase === "judging") {
-      if (!activeGroup || chatEnabled) {
-        return;
-      }
-
-      if (lineIndex < activeGroup.dialogues.length - 1) {
-        setLineIndex((current) => current + 1);
-        return;
-      }
-
-      setChatEnabled(true);
-      return;
-    }
-
     if (phase === "offer-dialogue") {
       if (!activeOfferLine) {
         return;
@@ -534,6 +536,41 @@ export default function Page() {
       }
 
       setPhase("offer-select");
+    }
+  }
+
+  function advancePanelTurn(questionText) {
+    const nextState = commitRoundAction({
+      type: PLAYER_ACTIONS.ADVANCE_PANEL_TURN,
+      payload: questionText ? { question: questionText } : {}
+    });
+
+    if (nextState.currentState === ROUND_STATES.DEALS) {
+      setJudgingFinished(true);
+      setChatEnabled(false);
+
+      if (OFFER_CONVERSATION.length) {
+        setOfferLineIndex(0);
+        setPhase("offer-dialogue");
+      } else {
+        const decisionState = commitRoundAction({
+          type: PLAYER_ACTIONS.ADVANCE
+        });
+
+        if (!decisionState.offers.length) {
+          commitRoundAction({
+            type: PLAYER_ACTIONS.ADVANCE
+          });
+          setPhase("result");
+        } else {
+          setPhase("offer-select");
+        }
+      }
+      return;
+    }
+
+    if (nextState.panel?.awaitingAnswer) {
+      setChatEnabled(true);
     }
   }
 
@@ -571,6 +608,48 @@ export default function Page() {
     });
   }
 
+  function handleStartBargain(offerId) {
+    const offer = roundState.offers.find((o) => o.id === offerId);
+    if (!offer) return;
+    setBargainMode(true);
+    setBargainOfferId(offerId);
+    setBargainAmount(String(offer.amount));
+    setBargainEquity(String(offer.equity));
+  }
+
+  function handleSubmitBargain() {
+    if (!bargainOfferId) return;
+    const amount = Number(bargainAmount);
+    const equity = Number(bargainEquity);
+    if (!Number.isFinite(amount) || amount <= 0 || !Number.isFinite(equity) || equity < 0 || equity > 100) return;
+
+    commitRoundAction({
+      type: PLAYER_ACTIONS.SUBMIT_BARGAIN,
+      payload: {
+        offerId: bargainOfferId,
+        terms: { amount, equity }
+      }
+    });
+
+    setBargainMode(false);
+    setBargainOfferId(null);
+    setBargainAmount("");
+    setBargainEquity("");
+  }
+
+  function handleCancelBargain() {
+    setBargainMode(false);
+    setBargainOfferId(null);
+    setBargainAmount("");
+    setBargainEquity("");
+  }
+
+  function handleDeclineQuestion() {
+    commitRoundAction({
+      type: PLAYER_ACTIONS.DECLINE_QUESTION
+    });
+  }
+
   async function handleSendMessage() {
     const trimmedMessage = chatInput.trim();
 
@@ -580,15 +659,17 @@ export default function Page() {
 
     setChatHistory((current) => [...current, trimmedMessage]);
     setChatInput("");
+    setChatEnabled(false);
 
     try {
+      const panelTurnIndex = roundStateRef.current.panel?.turn || 0;
       const response = await fetch("/api/judge-reactions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          groupIndex,
+          groupIndex: panelTurnIndex,
           playerMessage: trimmedMessage
         })
       });
@@ -607,47 +688,12 @@ export default function Page() {
       return;
     }
 
-    if (groupIndex < DIALOGUE_GROUPS.length - 1) {
-      setGroupIndex((current) => current + 1);
-      setLineIndex(0);
-      setChatEnabled(false);
-      return;
-    }
-
-    setJudgingFinished(true);
-    setChatEnabled(false);
-
     commitRoundAction({
-      type: PLAYER_ACTIONS.ADVANCE
-    });
-    const dealsState = commitRoundAction({
       type: PLAYER_ACTIONS.SUBMIT_ANSWER,
-      payload: {
-        answer: trimmedMessage
-      }
+      payload: { answer: trimmedMessage }
     });
 
-    if (!dealsState.offers.length) {
-      commitRoundAction({
-        type: PLAYER_ACTIONS.ADVANCE
-      });
-      setPhase("result");
-      return;
-    }
-
-    if (OFFER_CONVERSATION.length) {
-      setOfferLineIndex(0);
-      setPhase("offer-dialogue");
-      return;
-    }
-
-    const decisionState = commitRoundAction({
-      type: PLAYER_ACTIONS.ADVANCE
-    });
-
-    if (dealsState.currentState === ROUND_STATES.DEALS) {
-      setPhase("offer-select");
-    }
+    advancePanelTurn();
   }
 
   useEffect(() => {
@@ -867,6 +913,7 @@ export default function Page() {
         payload: createJudgeBundle(roundState.evaluation)
       });
       setPhase("judging");
+      advancePanelTurn();
     }, 900);
 
     return () => clearTimeout(timeoutId);
@@ -1022,6 +1069,82 @@ export default function Page() {
             <p className="mt-4 text-xs uppercase tracking-wide text-white/65 md:text-sm">
               Closing reason: {roundState.pitchCapture.closeReason}
             </p>
+          </div>
+        </section>
+      )}
+
+      {(phase === "judging" || phase === "offer-select") && (allowedActions.includes(PLAYER_ACTIONS.DECLINE_QUESTION) || allowedActions.includes(PLAYER_ACTIONS.SUBMIT_BARGAIN)) && (
+        <section className="absolute inset-x-0 bottom-3 z-50 px-3 md:bottom-6 md:px-6">
+          <div className="mx-auto w-full max-w-4xl rounded-3xl border border-white/25 bg-black/82 px-4 py-4 shadow-dialogue backdrop-blur md:px-6 md:py-5">
+            <p className="font-display text-lg text-white md:text-xl">Negotiation Actions</p>
+
+            {!bargainMode && (
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                {allowedActions.includes(PLAYER_ACTIONS.DECLINE_QUESTION) && (
+                  <button
+                    suppressHydrationWarning
+                    type="button"
+                    onClick={handleDeclineQuestion}
+                    className="rounded-xl border border-white/45 bg-white/10 px-5 py-2 text-sm font-semibold text-white transition hover:bg-white/20 md:text-base"
+                  >
+                    Decline to Answer
+                  </button>
+                )}
+                {allowedActions.includes(PLAYER_ACTIONS.SUBMIT_BARGAIN) && roundState.offers.map((offer) => (
+                  <button
+                    suppressHydrationWarning
+                    key={offer.id}
+                    type="button"
+                    onClick={() => handleStartBargain(offer.id)}
+                    className="rounded-xl border border-amber-400/60 bg-amber-500/15 px-5 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-500/25 md:text-base"
+                  >
+                    Bargain with {offer.judgeName}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {bargainMode && (
+              <div className="mt-3 space-y-3">
+                <p className="text-sm text-white/80">Propose revised terms for this offer:</p>
+                <div className="flex flex-wrap items-end gap-3">
+                  <label className="block">
+                    <span className="text-xs text-white/70">Amount ($)</span>
+                    <input
+                      type="number"
+                      value={bargainAmount}
+                      onChange={(e) => setBargainAmount(e.target.value)}
+                      className="mt-1 block w-32 rounded-lg border border-white/30 bg-white/10 px-3 py-2 text-sm text-white"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs text-white/70">Equity (%)</span>
+                    <input
+                      type="number"
+                      value={bargainEquity}
+                      onChange={(e) => setBargainEquity(e.target.value)}
+                      className="mt-1 block w-24 rounded-lg border border-white/30 bg-white/10 px-3 py-2 text-sm text-white"
+                    />
+                  </label>
+                  <button
+                    suppressHydrationWarning
+                    type="button"
+                    onClick={handleSubmitBargain}
+                    className="rounded-xl border border-green-400/60 bg-green-500/15 px-5 py-2 text-sm font-semibold text-green-200 transition hover:bg-green-500/25 md:text-base"
+                  >
+                    Submit Bargain
+                  </button>
+                  <button
+                    suppressHydrationWarning
+                    type="button"
+                    onClick={handleCancelBargain}
+                    className="rounded-xl border border-white/30 bg-white/5 px-5 py-2 text-sm font-semibold text-white/70 transition hover:bg-white/10 md:text-base"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </section>
       )}

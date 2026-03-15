@@ -4,6 +4,7 @@ export const ROUND_STATES = Object.freeze({
   PITCH_CLOSED: "PITCH_CLOSED",
   JUDGE_REACTIONS: "JUDGE_REACTIONS",
   FOLLOW_UP: "FOLLOW_UP",
+  PANEL: "PANEL",
   DEALS: "DEALS",
   PLAYER_DECISION: "PLAYER_DECISION",
   ROUND_RESULT: "ROUND_RESULT"
@@ -14,9 +15,43 @@ export const PLAYER_ACTIONS = Object.freeze({
   SUBMIT_PITCH_TRANSCRIPT: "submit_pitch_transcript",
   CLOSE_PITCH: "close_pitch",
   SUBMIT_ANSWER: "submit_answer",
+  ADVANCE_PANEL_TURN: "advance_panel_turn",
   ACCEPT_DEAL: "accept_deal",
   REJECT_DEAL: "reject_deal",
-  ADVANCE: "advance_when_timer_expires"
+  ADVANCE: "advance_when_timer_expires",
+  SUBMIT_BARGAIN: "submit_bargain",
+  DECLINE_QUESTION: "decline_question"
+});
+
+export const NEGOTIATION_ACTION_TYPES = Object.freeze([
+  "answer",
+  "bargain",
+  "accept",
+  "refuse",
+  "decline"
+]);
+
+export const BARGAIN_LIMITS = Object.freeze({
+  minEquityDelta: -5,
+  maxEquityDelta: 5,
+  minAmountChangePct: -0.20,
+  maxAmountChangePct: 0.20
+});
+
+export const PANEL_EVENT_TYPES = Object.freeze({
+  JUDGE_QUESTION: "judge_question",
+  FOUNDER_ANSWER: "founder_answer",
+  PANEL_CLOSED: "panel_closed"
+});
+
+export const DIRECTOR_DECISIONS = Object.freeze({
+  CONTINUE: "continue",
+  CLOSE: "close"
+});
+
+export const DEFAULT_PANEL_BUDGET = Object.freeze({
+  maxTurns: 6,
+  maxPerJudgeFollowups: 2
 });
 
 export const PITCH_CLOSE_REASONS = Object.freeze({
@@ -201,4 +236,111 @@ export function validateFinalizedPitch(value) {
       "Finalized pitch output must include non-empty text, transcript updates, timing bounds, and a supported close reason."
     );
   }
+}
+
+export function isNegotiationActionShape(value) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      NEGOTIATION_ACTION_TYPES.includes(value.type) &&
+      (value.offerId === undefined || hasText(value.offerId)) &&
+      (value.terms === undefined || (typeof value.terms === "object" && value.terms !== null)) &&
+      (value.answer === undefined || typeof value.answer === "string")
+  );
+}
+
+export function validateNegotiationAction(value) {
+  if (!isNegotiationActionShape(value)) {
+    throw new Error("Negotiation action must have a valid type, and optional offerId (string), terms (object), or answer (string).");
+  }
+}
+
+export function isBargainPayloadShape(value) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      hasText(value.offerId) &&
+      value.terms &&
+      typeof value.terms === "object" &&
+      isFiniteNumber(value.terms.amount) &&
+      isFiniteNumber(value.terms.equity)
+  );
+}
+
+export function validateBargainPayload(value) {
+  if (!isBargainPayloadShape(value)) {
+    throw new Error("Bargain payload must include an offerId (string) and terms with finite amount and equity.");
+  }
+}
+
+export function isPanelBudgetShape(value) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      isPositiveInteger(value.maxTurns) &&
+      isPositiveInteger(value.maxPerJudgeFollowups)
+  );
+}
+
+export function validatePanelBudget(value) {
+  if (!isPanelBudgetShape(value)) {
+    throw new Error("Panel budget must include positive maxTurns and maxPerJudgeFollowups.");
+  }
+}
+
+export function isPanelEventShape(value) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  if (!Object.values(PANEL_EVENT_TYPES).includes(value.type)) {
+    return false;
+  }
+
+  if (!isFiniteNumber(value.turn) || value.turn < 0) {
+    return false;
+  }
+
+  if (value.type === PANEL_EVENT_TYPES.JUDGE_QUESTION) {
+    return hasText(value.judgeId) && hasText(value.judgeName) && hasText(value.text);
+  }
+
+  if (value.type === PANEL_EVENT_TYPES.FOUNDER_ANSWER) {
+    return hasText(value.text);
+  }
+
+  if (value.type === PANEL_EVENT_TYPES.PANEL_CLOSED) {
+    return hasText(value.reason);
+  }
+
+  return false;
+}
+
+export function validatePanelEvent(value) {
+  if (!isPanelEventShape(value)) {
+    throw new Error("Panel event must include a valid type, turn number, and type-specific fields.");
+  }
+}
+
+export function isDirectorDecisionShape(value) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      Object.values(DIRECTOR_DECISIONS).includes(value.decision) &&
+      hasText(value.reason)
+  );
+}
+
+export function isPanelStateShape(value) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      isPanelBudgetShape(value.budget) &&
+      isFiniteNumber(value.turn) &&
+      value.turn >= 0 &&
+      Array.isArray(value.events) &&
+      value.events.every(isPanelEventShape) &&
+      typeof value.awaitingAnswer === "boolean" &&
+      typeof value.closed === "boolean"
+  );
 }
