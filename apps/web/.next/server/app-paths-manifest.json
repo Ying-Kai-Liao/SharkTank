@@ -1,1 +1,5 @@
-{}
+{
+  "/api/live-judge-reactions/route": "app/api/live-judge-reactions/route.js",
+  "/api/judge-reactions/route": "app/api/judge-reactions/route.js",
+  "/page": "app/page.js"
+}
