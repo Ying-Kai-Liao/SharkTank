@@ -18,6 +18,7 @@ import {
 } from "./resilience.js";
 import {
   discussionEntrySchema,
+  judgeTurnIntentSchema,
   memoryObservationSchema,
   peerQueryLogEntrySchema
 } from "./validation.js";
@@ -85,6 +86,20 @@ const graphState = Annotation.Root({
   memoryWrites: Annotation({
     reducer: (current, update) => [...current, ...update],
     default: () => []
+  }),
+  replanMode: Annotation({
+    default: () => false
+  }),
+  turnIntents: Annotation({
+    reducer: mergeByJudgeId,
+    default: () => []
+  }),
+  founderActions: Annotation({
+    reducer: (current, update) => [...current, ...update],
+    default: () => []
+  }),
+  turnNumber: Annotation({
+    default: () => 0
   })
 });
 
@@ -456,6 +471,165 @@ async function persistMemoryNode(state) {
   };
 }
 
+function deriveIntentFromDraft(draft) {
+  if (draft.score <= 30) {
+    return "drop_out";
+  }
+
+  if (draft.question && draft.question.trim().length > 0 && draft.score <= 60) {
+    return "ask";
+  }
+
+  if (draft.score > 70) {
+    return "offer";
+  }
+
+  if (draft.concerns.length === 0 && draft.score > 50) {
+    return "support";
+  }
+
+  if (draft.concerns.length > 0) {
+    return "revise";
+  }
+
+  return "wait";
+}
+
+function mapIntentToStatus(intent) {
+  const mapping = {
+    ask: "active",
+    wait: "waiting",
+    offer: "offering",
+    revise: "evaluating",
+    support: "supportive",
+    drop_out: "out"
+  };
+
+  return mapping[intent] ?? "evaluating";
+}
+
+async function replanJudgesNode(state) {
+  const replanResults = await Promise.all(
+    state.request.judges.map(async (judge) => {
+      const existingDraft = state.judgeDrafts.find((draft) => draft.judgeId === judge.id);
+
+      if (!existingDraft) {
+        const result = await executeDraftWithResilience(state, judge);
+        const intent = deriveIntentFromDraft(result.draft);
+        const status = mapIntentToStatus(intent);
+
+        return {
+          draft: result.draft,
+          intent: {
+            judgeId: judge.id,
+            judgeName: judge.name,
+            intent,
+            status,
+            dialogue: result.draft.shortReaction,
+            question: result.draft.question,
+            rationaleTags: result.draft.rationaleTags,
+            score: result.draft.score,
+            confidence: result.draft.confidence,
+            concerns: result.draft.concerns
+          },
+          diagnostic: result.diagnostic
+        };
+      }
+
+      const metadata = buildProviderMetadata({ stage: "replan", judge });
+
+      try {
+        const result = await executeProviderOperation({
+          limiter: state.providerLimiter,
+          operation: () =>
+            state.provider.generateJudgeDraft({
+              judge,
+              context: state.context,
+              memoryStore: state.memoryStore,
+              request: {
+                ...state.request,
+                founderActions: state.founderActions,
+                turnNumber: state.turnNumber,
+                memoryNamespaces: state.memoryNamespaces
+              }
+            }),
+          retryPolicy: getRetryPolicy(state.config),
+          metadata
+        });
+
+        const updatedDraft = result.value;
+        const intent = deriveIntentFromDraft(updatedDraft);
+        const status = mapIntentToStatus(intent);
+
+        return {
+          draft: updatedDraft,
+          intent: {
+            judgeId: judge.id,
+            judgeName: judge.name,
+            intent,
+            status,
+            dialogue: updatedDraft.shortReaction,
+            question: updatedDraft.question,
+            rationaleTags: updatedDraft.rationaleTags,
+            score: updatedDraft.score,
+            confidence: updatedDraft.confidence,
+            concerns: updatedDraft.concerns
+          },
+          diagnostic: result.diagnostics
+        };
+      } catch (error) {
+        const intent = deriveIntentFromDraft(existingDraft);
+        const status = mapIntentToStatus(intent);
+
+        return {
+          draft: existingDraft,
+          intent: {
+            judgeId: judge.id,
+            judgeName: judge.name,
+            intent,
+            status,
+            dialogue: existingDraft.shortReaction,
+            question: existingDraft.question,
+            rationaleTags: existingDraft.rationaleTags,
+            score: existingDraft.score,
+            confidence: existingDraft.confidence,
+            concerns: existingDraft.concerns
+          },
+          diagnostic: buildFallbackDiagnostics(error, metadata)
+        };
+      }
+    })
+  );
+
+  return {
+    judgeDrafts: replanResults.map((result) => result.draft),
+    turnIntents: replanResults.map((result) => result.intent),
+    providerDiagnostics: replanResults.map((result) => result.diagnostic)
+  };
+}
+
+async function finalizeTurnIntentsNode(state) {
+  const validated = state.turnIntents.map((intent) => judgeTurnIntentSchema.parse(intent));
+
+  return {
+    turnIntents: validated
+  };
+}
+
+function routeAfterBuildContext(state) {
+  return state.replanMode ? "replan_judges" : "draft_judges";
+}
+
+function routeAfterReplan(state) {
+  const hasDisagreement = evaluateDiscussionNeed(state.judgeDrafts, state.request.discussionPolicy);
+
+  if (hasDisagreement.shouldDiscuss && state.request.discussionPolicy.maxRounds > 0) {
+    return "peer_consultation";
+  }
+
+  return "finalize_turn_intents";
+}
+
 export function createJudgeOrchestrationGraph() {
   const workflow = new StateGraph(graphState).addNode("build_context", buildContextNode);
 
@@ -480,6 +654,36 @@ export function createJudgeOrchestrationGraph() {
       finalize: "finalize"
     })
     .addEdge("finalize", "persist_memory")
+    .addEdge("persist_memory", END);
+
+  return workflow.compile();
+}
+
+export function createJudgeReplanGraph() {
+  const workflow = new StateGraph(graphState).addNode("build_context", buildContextNode);
+
+  workflow.addEdge(START, "build_context");
+
+  workflow
+    .addNode("replan_judges", replanJudgesNode)
+    .addNode("peer_consultation", peerConsultationNode)
+    .addNode("deliberation", deliberationNode)
+    .addNode("finalize_turn_intents", finalizeTurnIntentsNode)
+    .addNode("persist_memory", persistMemoryNode)
+    .addConditionalEdges("build_context", routeAfterBuildContext, {
+      replan_judges: "replan_judges",
+      draft_judges: "build_context"
+    })
+    .addConditionalEdges("replan_judges", routeAfterReplan, {
+      peer_consultation: "peer_consultation",
+      finalize_turn_intents: "finalize_turn_intents"
+    })
+    .addEdge("peer_consultation", "deliberation")
+    .addConditionalEdges("deliberation", routeAfterDeliberation, {
+      peer_consultation: "peer_consultation",
+      finalize: "finalize_turn_intents"
+    })
+    .addEdge("finalize_turn_intents", "persist_memory")
     .addEdge("persist_memory", END);
 
   return workflow.compile();

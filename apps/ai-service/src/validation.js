@@ -59,6 +59,19 @@ export const peerQueryLogEntrySchema = z.object({
   reason: z.string().min(1)
 });
 
+export const judgeTurnIntentSchema = z.object({
+  judgeId: z.string().min(1),
+  judgeName: z.string().min(1),
+  intent: z.enum(["ask", "wait", "offer", "revise", "support", "drop_out"]),
+  status: z.enum(["evaluating", "waiting", "active", "offering", "supportive", "out"]),
+  dialogue: z.string().optional(),
+  question: z.string().optional(),
+  rationaleTags: z.array(z.string().min(1)).default([]),
+  score: z.number().int().min(0).max(100),
+  confidence: z.number().int().min(0).max(100),
+  concerns: z.array(z.string().min(1)).default([])
+});
+
 export const memoryObservationSchema = z.object({
   judgeId: z.string().min(1),
   sentiment: z.enum(["skeptical", "interested", "impressed"]),
