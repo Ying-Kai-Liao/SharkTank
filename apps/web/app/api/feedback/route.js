@@ -1,5 +1,17 @@
 function sanitizeDecisionType(value) {
-  return value === "accept" ? "accept" : "disaccept";
+  if (value === "accept") {
+    return "accept";
+  }
+
+  if (value === "game_over") {
+    return "game_over";
+  }
+
+  return "disaccept";
+}
+
+function toFeedbackMatrixDecision(decisionType) {
+  return decisionType === "accept" ? "accept" : "disaccept";
 }
 
 function sanitizeTier(value) {

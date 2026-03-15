@@ -30,6 +30,16 @@ body {
   font-family: var(--font-display);
 }
 
+.stage-idle-live {
+  animation: stage-idle-sway 2.8s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+
+.stage-speaker-live {
+  animation: stage-speaker-bob 0.72s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+
 .result-triangle {
   position: absolute;
   width: 0;
@@ -94,5 +104,33 @@ body {
   100% {
     transform: translate(calc(50vw - 50%), calc(50vh - 50%)) scale(0.2) rotate(180deg);
     opacity: 0;
+  }
+}
+
+@keyframes stage-idle-sway {
+  0% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-3px);
+  }
+
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes stage-speaker-bob {
+  0% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-8px);
+  }
+
+  100% {
+    transform: translateY(0);
   }
 }

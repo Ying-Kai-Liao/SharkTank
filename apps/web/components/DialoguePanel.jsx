@@ -1,3 +1,7 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+
 function MicrophoneIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5">
@@ -10,6 +14,7 @@ function MicrophoneIcon() {
 }
 
 export default function DialoguePanel({
+  speakerId,
   speakerName,
   text,
   chatEnabled,
@@ -20,7 +25,95 @@ export default function DialoguePanel({
   showAdvance,
   statusText
 }) {
+  const bubbleAudioRef = useRef(null);
+  const revealIntervalRef = useRef(null);
+  const [visibleText, setVisibleText] = useState(text || "");
+  const [isTextFullyVisible, setIsTextFullyVisible] = useState(true);
   const sendDisabled = !chatEnabled || !inputValue.trim();
+
+  useEffect(() => {
+    bubbleAudioRef.current = new Audio("/assets/music/Bubble.mp3");
+    bubbleAudioRef.current.preload = "auto";
+    bubbleAudioRef.current.volume = 0.28;
+
+    return () => {
+      if (revealIntervalRef.current) {
+        clearInterval(revealIntervalRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (revealIntervalRef.current) {
+      clearInterval(revealIntervalRef.current);
+      revealIntervalRef.current = null;
+    }
+
+    if (!text) {
+      setVisibleText("");
+      setIsTextFullyVisible(true);
+      return;
+    }
+
+    if (chatEnabled) {
+      setVisibleText(text);
+      setIsTextFullyVisible(true);
+      return;
+    }
+
+    let nextIndex = 0;
+    let audibleCharacterCount = 0;
+
+    setVisibleText("");
+    setIsTextFullyVisible(false);
+
+    revealIntervalRef.current = setInterval(() => {
+      nextIndex += 1;
+      const nextText = text.slice(0, nextIndex);
+      setVisibleText(nextText);
+
+      const latestCharacter = text.charAt(nextIndex - 1);
+      if (speakerId === "shark" && latestCharacter.trim()) {
+        audibleCharacterCount += 1;
+        if (audibleCharacterCount % 4 === 1 && bubbleAudioRef.current) {
+          bubbleAudioRef.current.currentTime = 0;
+          const playback = bubbleAudioRef.current.play();
+          if (playback && typeof playback.catch === "function") {
+            playback.catch(() => {
+              // Ignore autoplay policy errors until the page is unlocked by user input.
+            });
+          }
+        }
+      }
+
+      if (nextIndex >= text.length) {
+        clearInterval(revealIntervalRef.current);
+        revealIntervalRef.current = null;
+        setIsTextFullyVisible(true);
+      }
+    }, 28);
+
+    return () => {
+      if (revealIntervalRef.current) {
+        clearInterval(revealIntervalRef.current);
+        revealIntervalRef.current = null;
+      }
+    };
+  }, [chatEnabled, speakerId, text]);
+
+  function handleAdvanceClick() {
+    if (!isTextFullyVisible) {
+      if (revealIntervalRef.current) {
+        clearInterval(revealIntervalRef.current);
+        revealIntervalRef.current = null;
+      }
+      setVisibleText(text || "");
+      setIsTextFullyVisible(true);
+      return;
+    }
+
+    onAdvance();
+  }
 
   function handleSubmit(event) {
     event.preventDefault();
@@ -36,7 +129,8 @@ export default function DialoguePanel({
         <div className="mb-4 space-y-2.5">
           <p className="text-lg font-semibold leading-tight text-stage-text md:text-xl">{speakerName}</p>
           <p className="max-w-4xl text-sm text-stage-text/95 md:text-[1.1rem] md:leading-[1.35]">
-            {text}
+            {visibleText}
+            {!chatEnabled && !isTextFullyVisible ? <span className="ml-0.5 inline-block h-[1em] w-[0.55ch] animate-pulse bg-white/80 align-[-0.12em]" /> : null}
           </p>
         </div>
 
@@ -52,7 +146,7 @@ export default function DialoguePanel({
             <button
               suppressHydrationWarning
               type="button"
-              onClick={onAdvance}
+              onClick={handleAdvanceClick}
               className="rounded-md border border-white/40 px-3 py-1 text-xs font-semibold text-white transition hover:bg-white/10 md:text-sm"
             >
               Next
@@ -60,8 +154,7 @@ export default function DialoguePanel({
           )}
         </div>
 
-        {statusText && <p className="mb-3 text-xs text-white/75 md:text-sm">{statusText}</p>}
-
+       
         <form className="flex w-full items-center gap-2 md:gap-3" onSubmit={handleSubmit}>
           <label htmlFor="message-input" className="sr-only">
             Enter Message
