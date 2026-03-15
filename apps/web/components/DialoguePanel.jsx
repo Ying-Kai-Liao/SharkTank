@@ -18,7 +18,8 @@ export default function DialoguePanel({
   onSend,
   onAdvance,
   showAdvance,
-  statusText
+  statusText,
+  micActive = false
 }) {
   const sendDisabled = !chatEnabled || !inputValue.trim();
 
@@ -43,9 +44,15 @@ export default function DialoguePanel({
         <div className="mb-4 h-px w-full bg-white/20" />
 
         <div className="mb-3 flex items-center justify-between gap-3 text-xs text-stage-muted md:text-sm">
-          <div className="flex items-center gap-3">
+          <div className={`flex items-center gap-3 ${micActive ? "text-emerald-300" : ""}`}>
             <MicrophoneIcon />
-            <span>{chatEnabled ? "Press Enter or click Send" : "Read all judge dialogue first"}</span>
+            <span>
+              {micActive
+                ? "Live microphone active"
+                : chatEnabled
+                  ? "Press Enter or click Send"
+                  : "Read all judge dialogue first"}
+            </span>
           </div>
 
           {showAdvance && (

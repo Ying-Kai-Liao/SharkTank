@@ -81,6 +81,48 @@ body {
   left: 52%;
 }
 
+.character-float-idle {
+  animation: character-float-idle 3.2s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+
+.character-float-talking {
+  animation: character-float-talking 1.45s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+
+@keyframes character-float-idle {
+  0% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-6px);
+  }
+
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes character-float-talking {
+  0% {
+    transform: translateY(0);
+  }
+
+  35% {
+    transform: translateY(-9px);
+  }
+
+  70% {
+    transform: translateY(-3px);
+  }
+
+  100% {
+    transform: translateY(0);
+  }
+}
+
 @keyframes triangle-to-center {
   0% {
     transform: translate(0, 0) scale(1) rotate(0deg);

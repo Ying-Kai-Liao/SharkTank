@@ -6,6 +6,28 @@ const CAT_STANDING_FRAMES = Array.from(
   (_, index) => `/assets/characters/standing/cat_standing/Cat_IdleNeutral_${index + 1}.png`
 );
 
+const CAT_TALKING_POSITIVE_FRAMES = Array.from(
+  { length: 23 },
+  (_, index) => `/assets/characters/talking_positive/Cat_TalkPositive/Cat_TalkPositive_${index + 1}.png`
+);
+
+const DOG_TALKING_POSITIVE_FRAMES = [
+  ...Array.from(
+    { length: 23 },
+    (_, index) => `/assets/characters/talking_positive/Dog_TalkPositive/Dog_TalkPositive_${index + 1}.png`
+  ),
+  "/assets/characters/talking_positive/Dog_TalkPositive/DogPosittive_24.png"
+];
+
+const CHARACTER_MOTIONS = {
+  sitting: "sittingFrames",
+  sittingPositive: "sittingPositiveFrames",
+  sittingNegative: "sittingNegativeFrames",
+  talkingPositive: "talkingPositiveFrames",
+  talkingNegative: "talkingNegativeFrames",
+  standing: "standingFrames"
+};
+
 const characters = [
   {
     id: "cat",
@@ -18,6 +40,7 @@ const characters = [
     talkingNegativeSrc: "/assets/characters/talking_negative/Cat_TalkNegative/Cat_TalkNegative_1.png",
     standingSrc: "/assets/characters/standing/cat_standing/Cat_IdleNeutral_1.png",
     standingFrames: CAT_STANDING_FRAMES,
+    talkingPositiveFrames: CAT_TALKING_POSITIVE_FRAMES,
     heightClass: "h-[50vh] md:h-[70vh]"
   },
   {
@@ -30,6 +53,7 @@ const characters = [
     talkingPositiveSrc: "/assets/characters/talking_positive/Dog_TalkPositive/Dog_TalkPositive_1.png",
     talkingNegativeSrc: "/assets/characters/talking_negative/Dog_TalkNegative/Dog_TalkNegative_1.png",
     standingSrc: "/assets/characters/standing/dog_standing/dog_standing_01.png",
+    talkingPositiveFrames: DOG_TALKING_POSITIVE_FRAMES,
     heightClass: "h-[48vh] md:h-[72vh]"
   },
   {
@@ -70,24 +94,68 @@ export default function StageScene({
   onSend,
   onAdvance,
   showAdvance,
-  statusText
+  statusText,
+  micActive = false
 }) {
   const [hoveredJudgeId, setHoveredJudgeId] = useState(null);
-  const [standingFrameIndex, setStandingFrameIndex] = useState(0);
+  const [frameIndex, setFrameIndex] = useState(0);
+
+  function getMotionKey(character) {
+    const pitchPresence = livePresenceEnabled ? liveJudgePresence?.[character.id] : null;
+    const reaction = judgeReactions?.[character.id];
+
+    if (pitchPresence && !activeSpeakerId) {
+      if (pitchPresence.mood === "positive") {
+        return "sittingPositive";
+      }
+
+      if (pitchPresence.mood === "negative") {
+        return "sittingNegative";
+      }
+
+      return "sitting";
+    }
+
+    if (character.id === activeSpeakerId) {
+      if (reaction === "positive" && character.talkingPositiveSrc) {
+        return "talkingPositive";
+      }
+
+      if (reaction === "negative" && character.talkingNegativeSrc) {
+        return "talkingNegative";
+      }
+
+      return "standing";
+    }
+
+    if (reaction === "positive") {
+      return "sittingPositive";
+    }
+
+    if (reaction === "negative") {
+      return "sittingNegative";
+    }
+
+    return "sitting";
+  }
 
   useEffect(() => {
     const activeCharacter = characters.find((character) => character.id === activeSpeakerId);
-    if (!activeCharacter?.standingFrames?.length) {
-      setStandingFrameIndex(0);
+    const motionKey = activeCharacter ? getMotionKey(activeCharacter) : null;
+    const frameListKey = motionKey ? CHARACTER_MOTIONS[motionKey] : null;
+    const frames = frameListKey ? activeCharacter?.[frameListKey] : null;
+
+    if (!frames?.length || frames.length < 2) {
+      setFrameIndex(0);
       return;
     }
 
     const intervalId = setInterval(() => {
-      setStandingFrameIndex((current) => (current + 1) % activeCharacter.standingFrames.length);
-    }, 120);
+      setFrameIndex((current) => (current + 1) % frames.length);
+    }, motionKey === "standing" ? 120 : 90);
 
     return () => clearInterval(intervalId);
-  }, [activeSpeakerId]);
+  }, [activeSpeakerId, judgeReactions, liveJudgePresence, livePresenceEnabled]);
 
   const focusedJudgeId = offerSelectionEnabled ? hoveredJudgeId : activeSpeakerId;
 
@@ -128,46 +196,48 @@ export default function StageScene({
   }
 
   function resolveSprite(character) {
-    const pitchPresence = livePresenceEnabled ? liveJudgePresence?.[character.id] : null;
-    const reaction = judgeReactions?.[character.id];
+    const motionKey = getMotionKey(character);
+    const frameListKey = CHARACTER_MOTIONS[motionKey];
+    const frames = frameListKey ? character[frameListKey] : null;
 
-    if (pitchPresence && !activeSpeakerId) {
-      if (pitchPresence.mood === "positive") {
-        return character.sittingPositiveSrc;
-      }
-
-      if (pitchPresence.mood === "negative") {
-        return character.sittingNegativeSrc;
-      }
-
-      return character.sittingSrc;
+    if (frames?.length) {
+      return frames[frameIndex % frames.length];
     }
 
-    if (character.id === activeSpeakerId) {
-      if (reaction === "positive" && character.talkingPositiveSrc) {
-        return character.talkingPositiveSrc;
-      }
+    if (motionKey === "talkingPositive") {
+      return character.talkingPositiveSrc;
+    }
 
-      if (reaction === "negative" && character.talkingNegativeSrc) {
-        return character.talkingNegativeSrc;
-      }
+    if (motionKey === "talkingNegative") {
+      return character.talkingNegativeSrc;
+    }
 
-      if (character.standingFrames?.length) {
-        return character.standingFrames[standingFrameIndex % character.standingFrames.length];
-      }
-
+    if (motionKey === "standing") {
       return character.standingSrc;
     }
 
-    if (reaction === "positive") {
+    if (motionKey === "sittingPositive") {
       return character.sittingPositiveSrc;
     }
 
-    if (reaction === "negative") {
+    if (motionKey === "sittingNegative") {
       return character.sittingNegativeSrc;
     }
 
     return character.sittingSrc;
+  }
+
+  function resolveFloatingClass(character) {
+    if (focusedJudgeId && character.id !== focusedJudgeId) {
+      return "character-float-idle";
+    }
+
+    const motionKey = getMotionKey(character);
+    if (character.id === activeSpeakerId || motionKey === "talkingPositive" || motionKey === "talkingNegative") {
+      return "character-float-talking";
+    }
+
+    return "character-float-idle";
   }
 
   return (
@@ -203,11 +273,13 @@ export default function StageScene({
                 </p>
               </div>
             )}
-            <img
-              src={resolveSprite(character)}
-              alt={character.name}
-              className={`pixel-crisp w-auto max-w-[320px] drop-shadow-[0_15px_24px_rgba(0,0,0,0.72)] transition-transform duration-300 md:max-w-[420px] ${character.heightClass} ${character.id === "cat" ? "-scale-x-100" : ""} ${resolvePresenceMotion(liveJudgePresence?.[character.id])} ${focusedJudgeId && character.id !== focusedJudgeId ? "opacity-15 saturate-0 brightness-40" : "opacity-100"}`}
-            />
+            <div className={resolveFloatingClass(character)}>
+              <img
+                src={resolveSprite(character)}
+                alt={character.name}
+                className={`pixel-crisp w-auto max-w-[320px] drop-shadow-[0_15px_24px_rgba(0,0,0,0.72)] transition-transform duration-300 md:max-w-[420px] ${character.heightClass} ${character.id === "cat" ? "-scale-x-100" : ""} ${resolvePresenceMotion(liveJudgePresence?.[character.id])} ${focusedJudgeId && character.id !== focusedJudgeId ? "opacity-15 saturate-0 brightness-40" : "opacity-100"}`}
+              />
+            </div>
 
             {offerSelectionEnabled && (
               <div className="absolute -top-14 left-1/2 hidden -translate-x-1/2 flex-col items-center gap-2 group-hover:flex">
@@ -269,6 +341,7 @@ export default function StageScene({
           onAdvance={onAdvance}
           showAdvance={showAdvance}
           statusText={statusText}
+          micActive={micActive}
         />
       )}
     </section>

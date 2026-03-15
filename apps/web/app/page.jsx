@@ -40,6 +40,9 @@ const JUDGE_TO_STAGE = {
 };
 const OFFER_CONVERSATION = offerConversation.conversation || [];
 const RESULT_ANIMATION_MS = 1800;
+const COUNTDOWN_START = 3;
+const COUNTDOWN_TICK_MS = 800;
+const COUNTDOWN_START_HOLD_MS = 520;
 
 function createRoundState() {
   return createInitialGameState({
@@ -128,6 +131,12 @@ function buildRoundResultSummary(state, acceptedJudgeId) {
 export default function Page() {
   const router = useRouter();
   const hasNavigatedFeedbackRef = useRef(false);
+  const audioContextRef = useRef(null);
+  const lobbyTypingAudioRef = useRef(null);
+  const ambienceOscRef = useRef(null);
+  const ambienceGainRef = useRef(null);
+  const currentAmbienceModeRef = useRef(null);
+  const hasPlayedResultChimeRef = useRef(false);
   const roundStateRef = useRef(createRoundState());
   const captureAdapterRef = useRef(null);
   const liveReactionRequestRef = useRef(false);
@@ -155,6 +164,9 @@ export default function Page() {
   const [bargainEquity, setBargainEquity] = useState("");
   const [pitchSourceType, setPitchSourceType] = useState(PITCH_SOURCE_TYPES.MOCK);
   const [mediaRecorderAvailable, setMediaRecorderAvailable] = useState(false);
+  const [countdownValue, setCountdownValue] = useState(null);
+  const [pendingPitchSourceType, setPendingPitchSourceType] = useState(null);
+  const [liveMicError, setLiveMicError] = useState("");
 
   const activeOfferLine = OFFER_CONVERSATION[offerLineIndex] || null;
   const pitchTimer = getPitchTimerSnapshot(roundState, nowMs);
@@ -235,6 +247,174 @@ export default function Page() {
 
   const showAdvance = phase === "offer-dialogue" && Boolean(activeOfferLine);
 
+  function ensureAudioContext() {
+    if (typeof window === "undefined") {
+      return null;
+    }
+
+    if (!audioContextRef.current) {
+      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextCtor) {
+        return null;
+      }
+      audioContextRef.current = new AudioContextCtor();
+    }
+
+    if (audioContextRef.current.state === "suspended") {
+      audioContextRef.current.resume().catch(() => {
+        // Browser gesture rules may keep audio suspended until another interaction.
+      });
+    }
+
+    return audioContextRef.current;
+  }
+
+  function ensureLobbyTypingAudio() {
+    if (typeof window === "undefined") {
+      return null;
+    }
+
+    if (!lobbyTypingAudioRef.current) {
+      const audio = new Audio("/assets/music/Lobby.mp3");
+      audio.loop = true;
+      audio.volume = 0.3;
+      lobbyTypingAudioRef.current = audio;
+    }
+
+    return lobbyTypingAudioRef.current;
+  }
+
+  function setLobbyTypingAudioPlaying(shouldPlay) {
+    const audio = ensureLobbyTypingAudio();
+    if (!audio) {
+      return;
+    }
+
+    if (shouldPlay) {
+      audio.play().catch(() => {
+        // Browser gesture rules may block playback until user interaction.
+      });
+      return;
+    }
+
+    audio.pause();
+    audio.currentTime = 0;
+  }
+
+  async function primeLiveMicrophoneAccess() {
+    if (typeof navigator === "undefined" || typeof navigator?.mediaDevices?.getUserMedia !== "function") {
+      throw new Error("Live microphone is not supported in this browser.");
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((track) => track.stop());
+  }
+
+  function stopAmbience() {
+    if (ambienceOscRef.current) {
+      ambienceOscRef.current.stop();
+      ambienceOscRef.current.disconnect();
+      ambienceOscRef.current = null;
+    }
+
+    if (ambienceGainRef.current) {
+      ambienceGainRef.current.disconnect();
+      ambienceGainRef.current = null;
+    }
+
+    currentAmbienceModeRef.current = null;
+  }
+
+  function playAmbience(mode) {
+    if (currentAmbienceModeRef.current === mode) {
+      return;
+    }
+
+    const ctx = ensureAudioContext();
+    if (!ctx) {
+      return;
+    }
+
+    stopAmbience();
+
+    const configByMode = {
+      intro: { freq: 128, gain: 0.018 },
+      countdown: { freq: 112, gain: 0.02 },
+      pitch: { freq: 142, gain: 0.022 },
+      judging: { freq: 172, gain: 0.018 },
+      offers: { freq: 154, gain: 0.018 }
+    };
+
+    const config = configByMode[mode];
+    if (!config) {
+      return;
+    }
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(config.freq, ctx.currentTime);
+    gain.gain.setValueAtTime(config.gain, ctx.currentTime);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+
+    ambienceOscRef.current = osc;
+    ambienceGainRef.current = gain;
+    currentAmbienceModeRef.current = mode;
+  }
+
+  function playCountdownBeep(step) {
+    const ctx = ensureAudioContext();
+    if (!ctx) {
+      return;
+    }
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const isStart = step === "start";
+
+    osc.type = "square";
+    osc.frequency.setValueAtTime(isStart ? 880 : 600, ctx.currentTime);
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(isStart ? 0.08 : 0.05, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + (isStart ? 0.2 : 0.12));
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + (isStart ? 0.22 : 0.14));
+  }
+
+  function playResultChime(isPositiveResult) {
+    const ctx = ensureAudioContext();
+    if (!ctx) {
+      return;
+    }
+
+    const notes = isPositiveResult ? [523.25, 659.25, 783.99] : [392, 349.23, 293.66];
+
+    notes.forEach((freq, index) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const startAt = ctx.currentTime + index * 0.09;
+      const endAt = startAt + 0.18;
+
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, startAt);
+      gain.gain.setValueAtTime(0.0001, startAt);
+      gain.gain.exponentialRampToValueAtTime(0.07, startAt + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, endAt);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(startAt);
+      osc.stop(endAt + 0.01);
+    });
+  }
+
   function setRoundStateValue(nextState) {
     roundStateRef.current = nextState;
     setRoundState(nextState);
@@ -301,11 +481,7 @@ export default function Page() {
     });
   }
 
-  function handleStart() {
-    stopCapture("restart");
-    hasNavigatedFeedbackRef.current = false;
-
-    const selectedSourceType = pitchSourceType;
+  function startPitchRound(selectedSourceType) {
     const initialState = createRoundState();
     const startedAtMs = Date.now();
     const startedState = applyAction(initialState, {
@@ -353,6 +529,29 @@ export default function Page() {
     adapter.start({
       startedAtMs
     });
+  }
+
+  async function handleStart() {
+    stopCapture("restart");
+    hasNavigatedFeedbackRef.current = false;
+    hasPlayedResultChimeRef.current = false;
+    ensureAudioContext();
+
+    if (pitchSourceType === PITCH_SOURCE_TYPES.LIVE_STT) {
+      try {
+        await primeLiveMicrophoneAccess();
+        setLiveMicError("");
+      } catch {
+        setLiveMicError("Microphone permission is blocked. Allow mic access, then press Enter or Start Pitch again.");
+        return;
+      }
+    } else {
+      setLiveMicError("");
+    }
+
+    setPendingPitchSourceType(pitchSourceType);
+    setCountdownValue(COUNTDOWN_START);
+    setPhase("countdown");
   }
 
   function handleManualClosePitch() {
@@ -516,6 +715,7 @@ export default function Page() {
     setChatHistory((current) => [...current, trimmedMessage]);
     setChatInput("");
     setChatEnabled(false);
+    setLobbyTypingAudioPlaying(false);
 
     try {
       const panelTurnIndex = roundStateRef.current.panel?.turn || 0;
@@ -552,6 +752,12 @@ export default function Page() {
     advancePanelTurn();
   }
 
+  function handleChatInputChange(value) {
+    setChatInput(value);
+    const isTyping = phase === "judging" && chatEnabled && value.trim().length > 0;
+    setLobbyTypingAudioPlaying(isTyping);
+  }
+
   useEffect(() => {
     setMediaRecorderAvailable(
       typeof window !== "undefined" &&
@@ -559,6 +765,60 @@ export default function Page() {
       typeof navigator?.mediaDevices?.getUserMedia === "function"
     );
   }, []);
+
+  useEffect(() => {
+    function handleIntroEnter(event) {
+      if (event.key !== "Enter") {
+        return;
+      }
+
+      if (phase !== "intro") {
+        return;
+      }
+
+      const targetTag = event.target?.tagName;
+      if (targetTag === "INPUT" || targetTag === "TEXTAREA") {
+        return;
+      }
+
+      event.preventDefault();
+      handleStart();
+    }
+
+    window.addEventListener("keydown", handleIntroEnter);
+    return () => window.removeEventListener("keydown", handleIntroEnter);
+  }, [phase, pitchSourceType]);
+
+  useEffect(() => {
+    if (phase !== "countdown" || countdownValue === null) {
+      return;
+    }
+
+    if (countdownValue >= 0) {
+      playCountdownBeep(countdownValue);
+    } else {
+      playCountdownBeep("start");
+    }
+
+    const timeoutId = setTimeout(() => {
+      if (countdownValue > 0) {
+        setCountdownValue((current) => current - 1);
+        return;
+      }
+
+      if (countdownValue === 0) {
+        setCountdownValue(-1);
+        return;
+      }
+
+      const sourceToStart = pendingPitchSourceType || pitchSourceType;
+      setCountdownValue(null);
+      setPendingPitchSourceType(null);
+      startPitchRound(sourceToStart);
+    }, countdownValue >= 0 ? COUNTDOWN_TICK_MS : COUNTDOWN_START_HOLD_MS);
+
+    return () => clearTimeout(timeoutId);
+  }, [phase, countdownValue, pendingPitchSourceType, pitchSourceType]);
 
   useEffect(() => {
     if (roundState.currentState !== ROUND_STATES.PITCH) {
@@ -700,6 +960,35 @@ export default function Page() {
   }, [phase, roundResult]);
 
   useEffect(() => {
+    if (phase === "intro") {
+      playAmbience("intro");
+      return;
+    }
+
+    if (phase === "countdown") {
+      playAmbience("countdown");
+      return;
+    }
+
+    if (phase === "pitch") {
+      playAmbience("pitch");
+      return;
+    }
+
+    if (phase === "judging") {
+      playAmbience("judging");
+      return;
+    }
+
+    if (phase === "offer-dialogue" || phase === "offer-select") {
+      playAmbience("offers");
+      return;
+    }
+
+    stopAmbience();
+  }, [phase]);
+
+  useEffect(() => {
     if (phase !== "result" || !roundResult || hasNavigatedFeedbackRef.current) {
       return;
     }
@@ -712,8 +1001,33 @@ export default function Page() {
   }, [phase, roundResult]);
 
   useEffect(() => {
+    if (phase !== "result" || !roundResult || hasPlayedResultChimeRef.current) {
+      return;
+    }
+
+    playResultChime(roundResult.scoreTier !== "bad");
+    hasPlayedResultChimeRef.current = true;
+  }, [phase, roundResult]);
+
+  useEffect(() => {
+    const shouldPlayTypingAudio =
+      phase === "judging" &&
+      chatEnabled &&
+      chatInput.trim().length > 0;
+
+    setLobbyTypingAudioPlaying(shouldPlayTypingAudio);
+  }, [phase, chatEnabled, chatInput]);
+
+  useEffect(() => {
     return () => {
       stopCapture("unmount");
+      stopAmbience();
+      setLobbyTypingAudioPlaying(false);
+      if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+        audioContextRef.current.close().catch(() => {
+          // Ignore close errors during teardown.
+        });
+      }
     };
   }, []);
 
@@ -734,11 +1048,15 @@ export default function Page() {
         dialogueText={dialogueText}
         chatEnabled={phase === "judging" ? chatEnabled : false}
         inputValue={chatInput}
-        onInputChange={setChatInput}
+        onInputChange={handleChatInputChange}
         onSend={handleSendMessage}
         onAdvance={handleAdvanceDialogue}
         showAdvance={showAdvance}
         statusText={statusText}
+        micActive={
+          (phase === "pitch" && roundState.pitchCapture.sourceType === PITCH_SOURCE_TYPES.LIVE_STT) ||
+          (phase === "judging" && chatEnabled && chatInput.trim().length > 0)
+        }
       />
 
       {phase === "pitch" && pitchTimer && (
@@ -747,7 +1065,8 @@ export default function Page() {
             Pitch {formatTime(pitchTimer.remainingSeconds)}
           </div>
 
-          <section className="absolute inset-x-0 bottom-3 z-30 px-3 md:bottom-6 md:px-6">
+          {roundState.pitchCapture.sourceType === PITCH_SOURCE_TYPES.LIVE_STT && (
+            <section className="absolute inset-x-0 bottom-3 z-30 px-3 md:bottom-6 md:px-6">
             <div className="mx-auto w-full max-w-4xl rounded-3xl border border-white/25 bg-black/82 px-4 py-4 shadow-dialogue backdrop-blur md:px-6 md:py-5">
               <p className="font-display text-xl text-white md:text-2xl">Timed Pitch Capture</p>
               <p className="mt-2 text-sm text-white/90 md:text-base">
@@ -773,8 +1092,20 @@ export default function Page() {
                 </span>
               </div>
             </div>
-          </section>
+            </section>
+          )}
         </>
+      )}
+
+      {phase === "countdown" && (
+        <section className="absolute inset-0 z-40 flex items-center justify-center bg-black/68 p-4">
+          <div className="w-full max-w-xl rounded-3xl border border-white/25 bg-black/78 p-6 text-center backdrop-blur md:p-8">
+            <p className="font-display text-sm uppercase tracking-[0.22em] text-white/70 md:text-base">Pitch starts in</p>
+            <p className="font-display mt-3 text-7xl text-white md:text-9xl">
+              {countdownValue !== null && countdownValue >= 0 ? countdownValue : "START"}
+            </p>
+          </div>
+        </section>
       )}
 
       {phase === "intro" && (
@@ -808,15 +1139,16 @@ export default function Page() {
                   onClick={() => {
                     if (mediaRecorderAvailable) {
                       setPitchSourceType(PITCH_SOURCE_TYPES.LIVE_STT);
+                      setLiveMicError("");
                     }
                   }}
                   disabled={!mediaRecorderAvailable}
                   title={!mediaRecorderAvailable ? "Live microphone requires a browser with MediaRecorder and getUserMedia support" : undefined}
                   className={`rounded-lg border px-4 py-2 text-sm font-semibold transition ${
                     pitchSourceType === PITCH_SOURCE_TYPES.LIVE_STT
-                      ? "border-white/60 bg-white/20 text-white"
+                      ? "border-emerald-300/70 bg-emerald-500/20 text-emerald-100"
                       : mediaRecorderAvailable
-                        ? "border-white/25 bg-white/5 text-white/60 hover:bg-white/10"
+                        ? "border-emerald-300/40 bg-emerald-500/5 text-emerald-100/75 hover:bg-emerald-500/10"
                         : "cursor-not-allowed border-white/15 bg-white/5 text-white/30"
                   }`}
                 >
@@ -824,6 +1156,9 @@ export default function Page() {
                 </button>
               </div>
             </div>
+            {liveMicError ? (
+              <p className="mb-4 text-sm text-rose-300 md:text-base">{liveMicError}</p>
+            ) : null}
             <button
               suppressHydrationWarning
               type="button"
@@ -832,6 +1167,9 @@ export default function Page() {
             >
               Start Pitch
             </button>
+            <p className="mt-3 text-xs text-white/70 md:text-sm">
+              Tip: press Enter to start.
+            </p>
           </div>
         </section>
       )}
