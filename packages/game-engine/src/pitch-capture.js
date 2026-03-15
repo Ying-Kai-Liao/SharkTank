@@ -1,5 +1,13 @@
 import { PITCH_SOURCE_TYPES } from "../../contracts/src/index.js";
 
+export function isSpeechRecognitionSupported() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
 export const DEFAULT_MOCK_PITCH_SEGMENTS = Object.freeze([
   "We built a revenue coach for independent retailers.",
   "It analyzes customer history and recommends retention campaigns in minutes.",
