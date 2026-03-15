@@ -6,6 +6,19 @@ const CAT_STANDING_FRAMES = Array.from(
   (_, index) => `/assets/characters/standing/cat_standing/Cat_IdleNeutral_${index + 1}.png`
 );
 
+const CAT_TALKING_POSITIVE_FRAMES = Array.from(
+  { length: 23 },
+  (_, index) => `/assets/characters/talking_positive/Cat_TalkPositive/Cat_TalkPositive_${index + 1}.png`
+);
+
+const DOG_TALKING_POSITIVE_FRAMES = [
+  ...Array.from(
+    { length: 23 },
+    (_, index) => `/assets/characters/talking_positive/Dog_TalkPositive/Dog_TalkPositive_${index + 1}.png`
+  ),
+  "/assets/characters/talking_positive/Dog_TalkPositive/DogPosittive_24.png"
+];
+
 const characters = [
   {
     id: "cat",
@@ -15,6 +28,7 @@ const characters = [
     sittingPositiveSrc: "/assets/characters/sitting_positive/Cat_IdlePositive/Cat_IdlePositive_01.png",
     sittingNegativeSrc: "/assets/characters/sitting_negative/Cat_IdleNegative/Cat_IdleNegative.png",
     talkingPositiveSrc: "/assets/characters/talking_positive/Cat_TalkPositive/Cat_TalkPositive_1.png",
+    talkingPositiveFrames: CAT_TALKING_POSITIVE_FRAMES,
     talkingNegativeSrc: "/assets/characters/talking_negative/Cat_TalkNegative/Cat_TalkNegative_1.png",
     standingSrc: "/assets/characters/standing/cat_standing/Cat_IdleNeutral_1.png",
     standingFrames: CAT_STANDING_FRAMES,
@@ -28,6 +42,7 @@ const characters = [
     sittingPositiveSrc: "/assets/characters/sitting_positive/Dog_IdlePositive/Dog_IdlePositive_01.png",
     sittingNegativeSrc: "/assets/characters/sitting_negative/Dog_IdleNegative/Dog_IdleNegative_01.png",
     talkingPositiveSrc: "/assets/characters/talking_positive/Dog_TalkPositive/Dog_TalkPositive_1.png",
+    talkingPositiveFrames: DOG_TALKING_POSITIVE_FRAMES,
     talkingNegativeSrc: "/assets/characters/talking_negative/Dog_TalkNegative/Dog_TalkNegative_1.png",
     standingSrc: "/assets/characters/standing/dog_standing/dog_standing_01.png",
     heightClass: "h-[48vh] md:h-[72vh]"
@@ -74,6 +89,7 @@ export default function StageScene({
 }) {
   const [hoveredJudgeId, setHoveredJudgeId] = useState(null);
   const [standingFrameIndex, setStandingFrameIndex] = useState(0);
+  const [talkingFrameIndex, setTalkingFrameIndex] = useState(0);
 
   useEffect(() => {
     const activeCharacter = characters.find((character) => character.id === activeSpeakerId);
@@ -88,6 +104,22 @@ export default function StageScene({
 
     return () => clearInterval(intervalId);
   }, [activeSpeakerId]);
+
+  useEffect(() => {
+    const activeCharacter = characters.find((character) => character.id === activeSpeakerId);
+    const isPositiveTalking = judgeReactions?.[activeSpeakerId] === "positive";
+
+    if (!activeCharacter?.talkingPositiveFrames?.length || !isPositiveTalking) {
+      setTalkingFrameIndex(0);
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      setTalkingFrameIndex((current) => (current + 1) % activeCharacter.talkingPositiveFrames.length);
+    }, 90);
+
+    return () => clearInterval(intervalId);
+  }, [activeSpeakerId, judgeReactions]);
 
   const focusedJudgeId = offerSelectionEnabled ? hoveredJudgeId : activeSpeakerId;
 
@@ -145,6 +177,10 @@ export default function StageScene({
 
     if (character.id === activeSpeakerId) {
       if (reaction === "positive" && character.talkingPositiveSrc) {
+        if (character.talkingPositiveFrames?.length) {
+          return character.talkingPositiveFrames[talkingFrameIndex % character.talkingPositiveFrames.length];
+        }
+
         return character.talkingPositiveSrc;
       }
 

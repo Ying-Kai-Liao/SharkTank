@@ -40,6 +40,9 @@ const JUDGE_TO_STAGE = {
 };
 const OFFER_CONVERSATION = offerConversation.conversation || [];
 const RESULT_ANIMATION_MS = 1800;
+const COUNTDOWN_START = 3;
+const COUNTDOWN_TICK_MS = 800;
+const COUNTDOWN_START_HOLD_MS = 520;
 
 function createRoundState() {
   return createInitialGameState({
@@ -128,6 +131,11 @@ function buildRoundResultSummary(state, acceptedJudgeId) {
 export default function Page() {
   const router = useRouter();
   const hasNavigatedFeedbackRef = useRef(false);
+  const audioContextRef = useRef(null);
+  const ambienceOscRef = useRef(null);
+  const ambienceGainRef = useRef(null);
+  const currentAmbienceModeRef = useRef(null);
+  const hasPlayedResultChimeRef = useRef(false);
   const roundStateRef = useRef(createRoundState());
   const captureAdapterRef = useRef(null);
   const liveReactionRequestRef = useRef(false);
@@ -155,6 +163,8 @@ export default function Page() {
   const [bargainEquity, setBargainEquity] = useState("");
   const [pitchSourceType, setPitchSourceType] = useState(PITCH_SOURCE_TYPES.MOCK);
   const [mediaRecorderAvailable, setMediaRecorderAvailable] = useState(false);
+  const [countdownValue, setCountdownValue] = useState(null);
+  const [pendingPitchSourceType, setPendingPitchSourceType] = useState(null);
 
   const activeOfferLine = OFFER_CONVERSATION[offerLineIndex] || null;
   const pitchTimer = getPitchTimerSnapshot(roundState, nowMs);
@@ -235,6 +245,131 @@ export default function Page() {
 
   const showAdvance = phase === "offer-dialogue" && Boolean(activeOfferLine);
 
+  function ensureAudioContext() {
+    if (typeof window === "undefined") {
+      return null;
+    }
+
+    if (!audioContextRef.current) {
+      const Ctor = window.AudioContext || window.webkitAudioContext;
+      if (!Ctor) {
+        return null;
+      }
+      audioContextRef.current = new Ctor();
+    }
+
+    if (audioContextRef.current.state === "suspended") {
+      audioContextRef.current.resume().catch(() => {
+        // Browser autoplay policies may keep audio suspended until more gestures.
+      });
+    }
+
+    return audioContextRef.current;
+  }
+
+  function stopAmbience() {
+    if (ambienceOscRef.current) {
+      ambienceOscRef.current.stop();
+      ambienceOscRef.current.disconnect();
+      ambienceOscRef.current = null;
+    }
+
+    if (ambienceGainRef.current) {
+      ambienceGainRef.current.disconnect();
+      ambienceGainRef.current = null;
+    }
+
+    currentAmbienceModeRef.current = null;
+  }
+
+  function playAmbience(mode) {
+    if (currentAmbienceModeRef.current === mode) {
+      return;
+    }
+
+    const ctx = ensureAudioContext();
+    if (!ctx) {
+      return;
+    }
+
+    stopAmbience();
+
+    const modeConfig = {
+      intro: { freq: 128, gain: 0.018 },
+      countdown: { freq: 112, gain: 0.02 },
+      pitch: { freq: 142, gain: 0.022 },
+      judging: { freq: 174, gain: 0.018 },
+      offers: { freq: 154, gain: 0.018 }
+    };
+
+    const config = modeConfig[mode];
+    if (!config) {
+      return;
+    }
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(config.gain, ctx.currentTime);
+    gain.connect(ctx.destination);
+
+    const osc = ctx.createOscillator();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(config.freq, ctx.currentTime);
+    osc.connect(gain);
+    osc.start();
+
+    ambienceGainRef.current = gain;
+    ambienceOscRef.current = osc;
+    currentAmbienceModeRef.current = mode;
+  }
+
+  function playCountdownBeep(step) {
+    const ctx = ensureAudioContext();
+    if (!ctx) {
+      return;
+    }
+
+    const gain = ctx.createGain();
+    const osc = ctx.createOscillator();
+    const isStart = step === "start";
+
+    osc.type = "square";
+    osc.frequency.setValueAtTime(isStart ? 880 : 600, ctx.currentTime);
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(isStart ? 0.08 : 0.05, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + (isStart ? 0.2 : 0.12));
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + (isStart ? 0.22 : 0.14));
+  }
+
+  function playResultChime(isWin) {
+    const ctx = ensureAudioContext();
+    if (!ctx) {
+      return;
+    }
+
+    const notes = isWin ? [523.25, 659.25, 783.99] : [392, 349.23, 293.66];
+    notes.forEach((freq, index) => {
+      const gain = ctx.createGain();
+      const osc = ctx.createOscillator();
+      const start = ctx.currentTime + index * 0.09;
+      const end = start + 0.18;
+
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, start);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.07, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, end);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(end + 0.01);
+    });
+  }
+
   function setRoundStateValue(nextState) {
     roundStateRef.current = nextState;
     setRoundState(nextState);
@@ -301,11 +436,7 @@ export default function Page() {
     });
   }
 
-  function handleStart() {
-    stopCapture("restart");
-    hasNavigatedFeedbackRef.current = false;
-
-    const selectedSourceType = pitchSourceType;
+  function startPitchRound(selectedSourceType) {
     const initialState = createRoundState();
     const startedAtMs = Date.now();
     const startedState = applyAction(initialState, {
@@ -353,6 +484,16 @@ export default function Page() {
     adapter.start({
       startedAtMs
     });
+  }
+
+  function handleStart() {
+    stopCapture("restart");
+    hasNavigatedFeedbackRef.current = false;
+    hasPlayedResultChimeRef.current = false;
+    ensureAudioContext();
+    setPendingPitchSourceType(pitchSourceType);
+    setCountdownValue(COUNTDOWN_START);
+    setPhase("countdown");
   }
 
   function handleManualClosePitch() {
@@ -573,6 +714,37 @@ export default function Page() {
   }, [roundState.currentState]);
 
   useEffect(() => {
+    if (phase !== "countdown" || countdownValue === null) {
+      return;
+    }
+
+    if (countdownValue >= 0) {
+      playCountdownBeep(countdownValue);
+    } else {
+      playCountdownBeep("start");
+    }
+
+    const timeoutId = setTimeout(() => {
+      if (countdownValue > 0) {
+        setCountdownValue((current) => current - 1);
+        return;
+      }
+
+      if (countdownValue === 0) {
+        setCountdownValue(-1);
+        return;
+      }
+
+      const sourceToStart = pendingPitchSourceType || pitchSourceType;
+      setCountdownValue(null);
+      setPendingPitchSourceType(null);
+      startPitchRound(sourceToStart);
+    }, countdownValue >= 0 ? COUNTDOWN_TICK_MS : COUNTDOWN_START_HOLD_MS);
+
+    return () => clearTimeout(timeoutId);
+  }, [phase, countdownValue, pendingPitchSourceType, pitchSourceType]);
+
+  useEffect(() => {
     if (phase !== "pitch" || roundState.currentState !== ROUND_STATES.PITCH) {
       return;
     }
@@ -712,8 +884,52 @@ export default function Page() {
   }, [phase, roundResult]);
 
   useEffect(() => {
+    if (phase === "intro") {
+      playAmbience("intro");
+      return;
+    }
+
+    if (phase === "countdown") {
+      playAmbience("countdown");
+      return;
+    }
+
+    if (phase === "pitch") {
+      playAmbience("pitch");
+      return;
+    }
+
+    if (phase === "judging") {
+      playAmbience("judging");
+      return;
+    }
+
+    if (phase === "offer-dialogue" || phase === "offer-select") {
+      playAmbience("offers");
+      return;
+    }
+
+    stopAmbience();
+  }, [phase]);
+
+  useEffect(() => {
+    if (phase !== "result" || !roundResult || hasPlayedResultChimeRef.current) {
+      return;
+    }
+
+    playResultChime(roundResult.scoreTier !== "bad");
+    hasPlayedResultChimeRef.current = true;
+  }, [phase, roundResult]);
+
+  useEffect(() => {
     return () => {
       stopCapture("unmount");
+      stopAmbience();
+      if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+        audioContextRef.current.close().catch(() => {
+          // Ignore close errors during teardown.
+        });
+      }
     };
   }, []);
 
@@ -775,6 +991,17 @@ export default function Page() {
             </div>
           </section>
         </>
+      )}
+
+      {phase === "countdown" && (
+        <section className="absolute inset-0 z-40 flex items-center justify-center bg-black/68 p-4">
+          <div className="w-full max-w-xl rounded-3xl border border-white/25 bg-black/78 p-6 text-center backdrop-blur md:p-8">
+            <p className="font-display text-sm uppercase tracking-[0.22em] text-white/70 md:text-base">Pitch starts in</p>
+            <p className="font-display mt-3 text-7xl text-white md:text-9xl">
+              {countdownValue !== null && countdownValue >= 0 ? countdownValue : "START"}
+            </p>
+          </div>
+        </section>
       )}
 
       {phase === "intro" && (
