@@ -1,5 +1,5 @@
-import { orchestrateJudgePanel, createJudgeOrchestrationService } from "../../../../../ai-service/src/service.js";
-import { JUDGE_PROFILES } from "../../../../../packages/game-engine/src/judges.js";
+import { orchestrateJudgePanel, createJudgeOrchestrationService } from "@sharktank/ai-service";
+import { JUDGE_PROFILES } from "@sharktank/game-engine";
 
 const service = createJudgeOrchestrationService();
 

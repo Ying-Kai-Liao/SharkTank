@@ -8,6 +8,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@sharktank/ai-service": "*",
     "@sharktank/contracts": "*",
     "@sharktank/game-engine": "*",
     "next": "^15.3.1",
