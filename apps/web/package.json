@@ -9,9 +9,11 @@
     "test:api": "node --test tests/*.test.js"
   },
   "dependencies": {
+    "@sharktank/ai-service": "*",
     "@sharktank/contracts": "*",
     "@sharktank/game-engine": "*",
     "next": "^15.3.1",
+    "openai": "^4.73.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
