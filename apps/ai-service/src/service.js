@@ -1,5 +1,5 @@
 import { createJudgeServiceInput } from "../../../packages/contracts/src/index.js";
-import { loadAiServiceConfig } from "./config.js";
+import { loadAiServiceConfig, normalizeAiServiceConfig } from "./config.js";
 import { createJudgeOrchestrationGraph } from "./graph.js";
 import { InMemoryJudgeMemoryStore } from "./memory.js";
 import { createJudgeProvider } from "./providers.js";
@@ -17,6 +17,10 @@ function buildResilienceDebug(result) {
       fallbackUsed: entry.fallbackUsed,
       failures: entry.failures
     }));
+  const stageCounts = diagnostics.reduce((counts, entry) => {
+    counts[entry.stage] = (counts[entry.stage] ?? 0) + 1;
+    return counts;
+  }, {});
 
   return {
     minimumSuccessfulJudges: result.minimumSuccessfulJudges,
@@ -25,12 +29,13 @@ function buildResilienceDebug(result) {
     fallbackCount: diagnostics.filter((entry) => entry.fallbackUsed).length,
     degraded: diagnostics.some((entry) => entry.fallbackUsed),
     exhaustedCalls,
+    stageCounts,
     diagnostics
   };
 }
 
 export function createJudgeOrchestrationService(options = {}) {
-  const config = options.config ?? loadAiServiceConfig();
+  const config = normalizeAiServiceConfig(options.config ?? loadAiServiceConfig());
   const provider = options.provider ?? createJudgeProvider(config);
   const memoryStore = options.memoryStore ?? new InMemoryJudgeMemoryStore();
 
@@ -39,13 +44,15 @@ export function createJudgeOrchestrationService(options = {}) {
       const request = createJudgeServiceInput({
         ...input,
         discussionPolicy: {
-          maxTurns: config.discussionMaxTurns,
+          maxRounds: config.deliberationMaxRounds,
           disagreementThreshold: config.disagreementThreshold,
           minimumQuestionVariance: config.minimumQuestionVariance,
+          maxPeerQueriesPerRound: config.maxPeerQueriesPerRound,
+          maxPeerTargets: config.maxPeerTargets,
           ...(input?.discussionPolicy ?? {})
         }
       });
-      const graph = createJudgeOrchestrationGraph(request.judges);
+      const graph = createJudgeOrchestrationGraph();
       const result = await graph.invoke(
         {
           request,
@@ -54,21 +61,34 @@ export function createJudgeOrchestrationService(options = {}) {
           memoryStore
         },
         {
-          recursionLimit: Math.max(12, request.discussionPolicy.maxTurns * 4 + 8)
+          recursionLimit: Math.max(16, request.discussionPolicy.maxRounds * 6 + 10)
         }
       );
 
       if (runOptions.includeDebug) {
+        const peerQueries = result.peerQueryLog ?? [];
+        const usedPeerQueries = peerQueries.filter((entry) => entry.queryUsed);
+
         return {
           bundle: result.finalBundle,
           debug: {
             provider: provider.name,
             usedPlaceholderProvider: Boolean(provider.placeholder),
             discussionTriggered: result.discussionDecision.shouldDiscuss,
+            deliberationTriggered: result.discussionDecision.shouldDiscuss,
             discussionReason: result.discussionDecision.reason,
+            deliberationReason: result.discussionDecision.reason,
             disagreementScore: result.discussionDecision.disagreementScore,
             discussionTurns: result.discussionTurn,
+            deliberationRounds: result.deliberationRound,
             discussionLog: result.discussionLog,
+            deliberationLog: result.discussionLog,
+            peerQueries,
+            peerQueryCount: usedPeerQueries.length,
+            toolUsage: {
+              peerQueries: usedPeerQueries.length,
+              maxPeerQueriesPerRound: request.discussionPolicy.maxPeerQueriesPerRound
+            },
             memoryWrites: result.memoryWrites,
             resilience: buildResilienceDebug(result)
           }

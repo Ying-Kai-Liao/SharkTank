@@ -32,3 +32,4 @@ __pycache__/
 .codex/
 .gemini/
 skills-lock.json
+local-skills

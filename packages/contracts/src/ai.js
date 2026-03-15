@@ -7,9 +7,11 @@ export const AI_SENTIMENTS = Object.freeze([
 ]);
 
 export const DEFAULT_DISCUSSION_POLICY = Object.freeze({
-  maxTurns: 2,
+  maxRounds: 3,
   disagreementThreshold: 14,
-  minimumQuestionVariance: 2
+  minimumQuestionVariance: 2,
+  maxPeerQueriesPerRound: 1,
+  maxPeerTargets: 2
 });
 
 function hasText(value) {
@@ -18,6 +20,80 @@ function hasText(value) {
 
 function isFiniteNumber(value) {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function clampNumber(value, min, max, fallback) {
+  if (!isFiniteNumber(value)) {
+    return fallback;
+  }
+
+  return Math.max(min, Math.min(max, value));
+}
+
+function toFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+export function normalizeDiscussionPolicy(value) {
+  const policy = value && typeof value === "object" ? value : {};
+  const maxRounds = clampNumber(
+    toFiniteNumber(policy.maxRounds ?? policy.maxTurns),
+    0,
+    3,
+    DEFAULT_DISCUSSION_POLICY.maxRounds
+  );
+
+  return Object.freeze({
+    maxRounds,
+    disagreementThreshold: clampNumber(
+      toFiniteNumber(policy.disagreementThreshold),
+      0,
+      Number.MAX_SAFE_INTEGER,
+      DEFAULT_DISCUSSION_POLICY.disagreementThreshold
+    ),
+    minimumQuestionVariance: clampNumber(
+      toFiniteNumber(policy.minimumQuestionVariance),
+      1,
+      Number.MAX_SAFE_INTEGER,
+      DEFAULT_DISCUSSION_POLICY.minimumQuestionVariance
+    ),
+    maxPeerQueriesPerRound: clampNumber(
+      toFiniteNumber(policy.maxPeerQueriesPerRound),
+      0,
+      3,
+      DEFAULT_DISCUSSION_POLICY.maxPeerQueriesPerRound
+    ),
+    maxPeerTargets: clampNumber(
+      toFiniteNumber(policy.maxPeerTargets),
+      1,
+      3,
+      DEFAULT_DISCUSSION_POLICY.maxPeerTargets
+    )
+  });
+}
+
+export function isDiscussionPolicyShape(value) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const maxRounds = value.maxRounds ?? value.maxTurns;
+
+  return (
+    isFiniteNumber(maxRounds) &&
+    maxRounds >= 0 &&
+    maxRounds <= 3 &&
+    isFiniteNumber(value.disagreementThreshold) &&
+    value.disagreementThreshold >= 0 &&
+    isFiniteNumber(value.minimumQuestionVariance) &&
+    value.minimumQuestionVariance >= 1 &&
+    (value.maxPeerQueriesPerRound === undefined ||
+      (isFiniteNumber(value.maxPeerQueriesPerRound) &&
+        value.maxPeerQueriesPerRound >= 0 &&
+        value.maxPeerQueriesPerRound <= 3)) &&
+    (value.maxPeerTargets === undefined ||
+      (isFiniteNumber(value.maxPeerTargets) && value.maxPeerTargets >= 1 && value.maxPeerTargets <= 3))
+  );
 }
 
 export function isEvaluationShape(value) {
@@ -68,12 +144,7 @@ export function isJudgeServiceInputShape(value) {
     value.judges.every(isJudgeProfileShape) &&
     Array.isArray(value.transcript) &&
     value.transcript.every(isTranscriptEntryShape) &&
-    isFiniteNumber(discussionPolicy.maxTurns) &&
-    discussionPolicy.maxTurns >= 0 &&
-    isFiniteNumber(discussionPolicy.disagreementThreshold) &&
-    discussionPolicy.disagreementThreshold >= 0 &&
-    isFiniteNumber(discussionPolicy.minimumQuestionVariance) &&
-    discussionPolicy.minimumQuestionVariance >= 1
+    isDiscussionPolicyShape(discussionPolicy)
   );
 }
 
@@ -86,10 +157,7 @@ export function createJudgeServiceInput(input) {
     evaluation: input?.evaluation ?? null,
     judges: Array.isArray(input?.judges) ? input.judges : [],
     transcript: Array.isArray(input?.transcript) ? input.transcript : [],
-    discussionPolicy: {
-      ...DEFAULT_DISCUSSION_POLICY,
-      ...(input?.discussionPolicy ?? {})
-    }
+    discussionPolicy: normalizeDiscussionPolicy(input?.discussionPolicy)
   };
 
   validateJudgeServiceInput(normalized);

@@ -1,13 +1,31 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  applyAction,
+  createInitialGameState,
+  createMockPitchTranscriptSource,
+  createPitchCaptureAdapter,
+  getPitchTimerSnapshot,
+  JUDGE_PROFILES,
+  PLAYER_ACTIONS,
+  PITCH_CLOSE_REASONS,
+  PITCH_SOURCE_TYPES,
+  ROUND_STATES
+} from "@sharktank/game-engine";
 import judgeDialogues from "./data/mock-judge-dialogues.json";
 import offerConversation from "./data/mock-offer-conversation.json";
 import ScoreBadge from "../components/ScoreBadge";
 import StageScene from "../components/StageScene";
 
-const PITCH_SECONDS = 5;
+const PITCH_SECONDS = 45;
+const LIVE_REACTION_POLL_MS = 1_200;
+const STAGE_JUDGES = Object.freeze([
+  { id: "cat", name: "Zephyr Valtos" },
+  { id: "dog", name: "Ryo Barkman" },
+  { id: "shark", name: "Mara Finley" }
+]);
 const JUDGE_NAMES = {
   cat: "Zephyr Valtos",
   dog: "Ryo Barkman",
@@ -15,26 +33,18 @@ const JUDGE_NAMES = {
 };
 const DIALOGUE_GROUPS = judgeDialogues.groups || [];
 const OFFER_CONVERSATION = offerConversation.conversation || [];
-const OFFER_BY_JUDGE = offerConversation.offers || {};
-const OFFER_JUDGE_IDS = Object.entries(OFFER_BY_JUDGE)
-  .filter(([, offer]) => Boolean(offer))
-  .map(([judgeId]) => judgeId);
 const RESULT_ANIMATION_MS = 1800;
-const WINNING_SCORE_TIERS = new Set(["medium", "good"]);
-const AUDIO_PATHS = {
-  countdown: "/assets/music/Countdown.mp3",
-  debate: "/assets/music/DebateMusic.mp3",
-  lobby: "/assets/music/LobbyMusic.mp3",
-  nothing: "/assets/music/NothingMusic.mp3",
-  losing: "/assets/music/Losing.mp3",
-  winning: "/assets/music/Winning.mp3"
-};
+
+function createRoundState() {
+  return createInitialGameState({
+    pitchDurationSeconds: PITCH_SECONDS
+  });
+}
 
 function formatTime(secondsLeft) {
-  const minutes = Math.floor(secondsLeft / 60)
-    .toString()
-    .padStart(1 , "0");
-  const seconds = (secondsLeft % 60).toString().padStart(2, "0");
+  const safeSeconds = Math.max(0, secondsLeft);
+  const minutes = Math.floor(safeSeconds / 60).toString();
+  const seconds = (safeSeconds % 60).toString().padStart(2, "0");
   return `${minutes}:${seconds}`;
 }
 
@@ -46,21 +56,83 @@ function formatOffer(offer) {
   return `$${Number(offer.amount || 0).toLocaleString()} for ${Number(offer.equity || 0)}%`;
 }
 
+function joinTranscriptUpdates(updates) {
+  return updates
+    .map((update) => update.text.trim())
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function createJudgeBundle(evaluation) {
+  const leadQuestion = "What evidence do you have that customers will keep buying this?";
+
+  return {
+    leadQuestion,
+    judgeResponses: JUDGE_PROFILES.map((judge, index) => ({
+      judgeId: judge.id,
+      judgeName: judge.name,
+      sentiment: index === 0 ? "impressed" : "interested",
+      shortReaction: `${judge.name} sees enough traction to keep pressing on the core business case.`,
+      question: leadQuestion,
+      rationaleTags: [
+        evaluation.business_viability >= 70 ? "strong_monetization" : "needs_revenue_proof",
+        evaluation.clarity >= 70 ? "clear_pitch" : "needs_clarity"
+      ]
+    }))
+  };
+}
+
+function averageEvaluationScore(evaluation) {
+  if (!evaluation) {
+    return 0;
+  }
+
+  const values = Object.values(evaluation);
+  return Math.round(values.reduce((total, value) => total + value, 0) / values.length);
+}
+
+function resolveScoreTier(score) {
+  if (score >= 80) {
+    return "good";
+  }
+
+  if (score >= 62) {
+    return "medium";
+  }
+
+  return "bad";
+}
+
+function buildRoundResultSummary(state, acceptedJudgeId) {
+  const score = averageEvaluationScore(state.evaluation);
+  const decisionType = acceptedJudgeId ? "accept" : "disaccept";
+
+  return {
+    score,
+    scoreTier: resolveScoreTier(score),
+    decisionType,
+    catchphrase:
+      state.roundResult?.summary ||
+      state.roundResult?.headline ||
+      "The round has been resolved from the deterministic game state."
+  };
+}
+
 export default function Page() {
   const router = useRouter();
   const hasNavigatedFeedbackRef = useRef(false);
-  const countdownAudioRef = useRef(null);
-  const debateMusicRef = useRef(null);
-  const lobbyMusicRef = useRef(null);
-  const nothingMusicRef = useRef(null);
-  const losingAudioRef = useRef(null);
-  const winningAudioRef = useRef(null);
-  const activeBackgroundTrackRef = useRef(null);
-  const hasPlayedResultAudioRef = useRef(false);
+  const roundStateRef = useRef(createRoundState());
+  const captureAdapterRef = useRef(null);
+  const liveReactionRequestRef = useRef(false);
+  const liveReactionMetaRef = useRef({
+    lastReactionAtMs: null,
+    lastTranscriptSequence: null
+  });
 
   const [phase, setPhase] = useState("intro");
-  const [countdown, setCountdown] = useState(3);
-  const [timeLeft, setTimeLeft] = useState(PITCH_SECONDS);
+  const [roundState, setRoundState] = useState(roundStateRef.current);
+  const [nowMs, setNowMs] = useState(Date.now());
   const [groupIndex, setGroupIndex] = useState(0);
   const [lineIndex, setLineIndex] = useState(0);
   const [chatEnabled, setChatEnabled] = useState(false);
@@ -72,208 +144,131 @@ export default function Page() {
   const [offerDecisions, setOfferDecisions] = useState({});
   const [acceptedOfferJudgeId, setAcceptedOfferJudgeId] = useState(null);
   const [roundResult, setRoundResult] = useState(null);
-  const [isResolvingResult, setIsResolvingResult] = useState(false);
+  const [liveReactionEvent, setLiveReactionEvent] = useState(null);
 
   const activeGroup = DIALOGUE_GROUPS[groupIndex] || null;
   const activeLine = activeGroup?.dialogues?.[lineIndex] || null;
   const activeOfferLine = OFFER_CONVERSATION[offerLineIndex] || null;
+  const pitchTimer = getPitchTimerSnapshot(roundState, nowMs);
+  const pitchTranscriptText = joinTranscriptUpdates(roundState.pitchCapture.transcriptUpdates);
+  const offersByJudge = Object.fromEntries(roundState.offers.map((offer) => [offer.judgeId, offer]));
+  const offerJudgeIds = roundState.offers.map((offer) => offer.judgeId);
+  const liveJudgePresence = Object.fromEntries(
+    (liveReactionEvent?.judges || []).map((judge) => [judge.judgeId, judge])
+  );
 
   const activeSpeakerId =
     phase === "judging" && !chatEnabled && !judgingFinished && activeLine ? activeLine.speakerId : null;
-
   const activeOfferSpeakerId = phase === "offer-dialogue" && activeOfferLine ? activeOfferLine.speakerId : null;
-
   const spotlightSpeakerId = activeSpeakerId || activeOfferSpeakerId;
 
-  const rejectedOfferCount = OFFER_JUDGE_IDS.filter((judgeId) => offerDecisions[judgeId] === "rejected").length;
-  const allOffersRejected = OFFER_JUDGE_IDS.length > 0 && rejectedOfferCount === OFFER_JUDGE_IDS.length;
+  const rejectedOfferCount = offerJudgeIds.filter((judgeId) => offerDecisions[judgeId] === "rejected").length;
+  const allOffersRejected = offerJudgeIds.length > 0 && rejectedOfferCount === offerJudgeIds.length;
+  const displayScore = averageEvaluationScore(roundState.evaluation);
 
   const speakerName =
     phase === "offer-dialogue" && activeOfferSpeakerId ? JUDGE_NAMES[activeOfferSpeakerId] || "Judge"
       : phase === "judging" && activeSpeakerId ? JUDGE_NAMES[activeSpeakerId] || "Judge"
-      : phase === "judging" && chatEnabled ? "Your Turn"
-      : phase === "offer-select" ? "Offer Decision"
-      : "";
+        : phase === "judging" && chatEnabled ? "Your Turn"
+          : phase === "offer-select" ? "Offer Decision"
+            : phase === "pitch" ? "Pitch Capture"
+              : phase === "pitch-closed" ? "Pitch Locked"
+                : "";
 
   const dialogueText =
     phase === "offer-dialogue" && activeOfferLine ? activeOfferLine.text
       : phase === "offer-select" && acceptedOfferJudgeId
-        ? `You accepted ${JUDGE_NAMES[acceptedOfferJudgeId]}'s offer: ${formatOffer(OFFER_BY_JUDGE[acceptedOfferJudgeId])}.`
+        ? `You accepted ${JUDGE_NAMES[acceptedOfferJudgeId]}'s offer: ${formatOffer(offersByJudge[acceptedOfferJudgeId])}.`
         : phase === "offer-select" && allOffersRejected
-          ? "You disaccepted all offers. Hover judges to review their offer cards again."
-          : phase === "offer-select" && !OFFER_JUDGE_IDS.length
+          ? "You rejected every available offer. Hover judges to inspect the cards again."
+          : phase === "offer-select" && !offerJudgeIds.length
             ? "No judges made an offer this round."
             : phase === "offer-select"
-              ? "Hover each judge. A triangle offer card will appear, then click Accept or Reject All Offer."
+              ? "Hover each judge to inspect the offer card, then accept one or reject them all."
               : phase === "judging" && !chatEnabled && activeLine ? activeLine.text
-      : phase === "judging" && judgingFinished
-        ? "All scripted judge dialogue is complete. You can keep chatting freely now."
-        : phase === "judging"
-          ? "Reply to the judges to continue."
-          : "";
+                : phase === "judging"
+                  ? "Reply to the judges to continue the round."
+                  : phase === "pitch" && pitchTranscriptText
+                    ? pitchTranscriptText
+                    : phase === "pitch"
+                      ? "Mock transcript capture is running. The engine will finalize this pitch when the timer closes."
+                      : phase === "pitch-closed"
+                        ? roundState.pitchCapture.finalizedPitch?.text || "Pitch finalized."
+                        : "";
 
   const statusText =
-    phase === "offer-dialogue" && activeOfferLine
-      ? `Offer conversation ${offerLineIndex + 1}/${OFFER_CONVERSATION.length}`
-      : phase === "offer-select" && acceptedOfferJudgeId
-        ? "Deal locked. You can still hover judges to inspect cards."
-        : phase === "offer-select"
-          ? `Offers available: ${OFFER_JUDGE_IDS.length} • Rejected: ${rejectedOfferCount}`
-          : phase === "judging" && !chatEnabled && activeGroup
-      ? `Group ${groupIndex + 1}/${DIALOGUE_GROUPS.length} • Dialogue ${lineIndex + 1}/${activeGroup.dialogues.length}`
-      : phase === "judging" && !judgingFinished
-        ? "Send your reply. After you send, the next group of judge dialogue will appear."
-        : phase === "judging" && judgingFinished
-          ? `Player replies sent: ${chatHistory.length}`
-          : "";
+    phase === "pitch" && pitchTimer
+      ? `Source: ${roundState.pitchCapture.sourceType} | Live presence: ${liveReactionEvent?.sourceType || "warming_up"} | Remaining: ${formatTime(pitchTimer.remainingSeconds)}`
+      : phase === "pitch-closed"
+        ? `Closed: ${roundState.pitchCapture.closeReason || PITCH_CLOSE_REASONS.MANUAL}`
+        : phase === "offer-dialogue" && activeOfferLine
+          ? `Offer conversation ${offerLineIndex + 1}/${OFFER_CONVERSATION.length}`
+          : phase === "offer-select" && acceptedOfferJudgeId
+            ? "Deal locked. You can still hover judges to inspect the cards."
+            : phase === "offer-select"
+              ? `Offers available: ${offerJudgeIds.length} | Rejected: ${rejectedOfferCount}`
+              : phase === "judging" && !chatEnabled && activeGroup
+                ? `Group ${groupIndex + 1}/${DIALOGUE_GROUPS.length} | Dialogue ${lineIndex + 1}/${activeGroup.dialogues.length}`
+                : phase === "judging" && !judgingFinished
+                  ? "Send your reply. The next scripted judge group will appear after your answer."
+                  : phase === "judging" && judgingFinished
+                    ? `Player replies sent: ${chatHistory.length}`
+                    : "";
 
   const showAdvance =
-    (phase === "judging" && !chatEnabled && !!activeLine) ||
-    (phase === "offer-dialogue" && !!activeOfferLine);
+    (phase === "judging" && !chatEnabled && Boolean(activeLine)) ||
+    (phase === "offer-dialogue" && Boolean(activeOfferLine));
 
-  function playAudioEffect(audioRef) {
-    const audio = audioRef.current;
-    if (!audio) {
-      return;
-    }
-
-    audio.currentTime = 0;
-    const playback = audio.play();
-    if (playback && typeof playback.catch === "function") {
-      playback.catch(() => {
-        // Ignore autoplay policy errors; user interaction will unlock audio.
-      });
-    }
+  function setRoundStateValue(nextState) {
+    roundStateRef.current = nextState;
+    setRoundState(nextState);
   }
 
-  function stopBackgroundMusic() {
-    if (debateMusicRef.current) {
-      debateMusicRef.current.pause();
-      debateMusicRef.current.currentTime = 0;
-    }
-
-    if (lobbyMusicRef.current) {
-      lobbyMusicRef.current.pause();
-      lobbyMusicRef.current.currentTime = 0;
-    }
-
-    if (nothingMusicRef.current) {
-      nothingMusicRef.current.pause();
-      nothingMusicRef.current.currentTime = 0;
-    }
-
-    activeBackgroundTrackRef.current = null;
+  function stopCapture(reason) {
+    captureAdapterRef.current?.stop(reason);
+    captureAdapterRef.current = null;
   }
 
-  function playBackgroundMusic(trackKey) {
-    if (!trackKey || activeBackgroundTrackRef.current === trackKey) {
-      return;
-    }
-
-    if (trackKey === "debate") {
-      if (lobbyMusicRef.current) {
-        lobbyMusicRef.current.pause();
-        lobbyMusicRef.current.currentTime = 0;
-      }
-      const debate = debateMusicRef.current;
-      if (debate) {
-        debate.currentTime = 0;
-        const playback = debate.play();
-        if (playback && typeof playback.catch === "function") {
-          playback.catch(() => {
-            // Ignore autoplay policy errors; user interaction will unlock audio.
-          });
-        }
-      }
-    }
-
-    if (trackKey === "lobby") {
-      if (debateMusicRef.current) {
-        debateMusicRef.current.pause();
-        debateMusicRef.current.currentTime = 0;
-      }
-      if (nothingMusicRef.current) {
-        nothingMusicRef.current.pause();
-        nothingMusicRef.current.currentTime = 0;
-      }
-      const lobby = lobbyMusicRef.current;
-      if (lobby) {
-        lobby.currentTime = 0;
-        const playback = lobby.play();
-        if (playback && typeof playback.catch === "function") {
-          playback.catch(() => {
-            // Ignore autoplay policy errors; user interaction will unlock audio.
-          });
-        }
-      }
-    }
-
-    if (trackKey === "nothing") {
-      if (debateMusicRef.current) {
-        debateMusicRef.current.pause();
-        debateMusicRef.current.currentTime = 0;
-      }
-      if (lobbyMusicRef.current) {
-        lobbyMusicRef.current.pause();
-        lobbyMusicRef.current.currentTime = 0;
-      }
-      const nothing = nothingMusicRef.current;
-      if (nothing) {
-        nothing.currentTime = 0;
-        const playback = nothing.play();
-        if (playback && typeof playback.catch === "function") {
-          playback.catch(() => {
-            // Ignore autoplay policy errors; user interaction will unlock audio.
-          });
-        }
-      }
-    }
-
-    activeBackgroundTrackRef.current = trackKey;
+  function resetLiveReactionState() {
+    liveReactionMetaRef.current = {
+      lastReactionAtMs: null,
+      lastTranscriptSequence: null
+    };
+    liveReactionRequestRef.current = false;
+    setLiveReactionEvent(null);
   }
 
-  async function resolveRoundResult(decisionType, acceptedJudgeId = null) {
-    if (isResolvingResult || phase === "result-animation" || phase === "result") {
-      return;
-    }
-
-    setIsResolvingResult(true);
-
+  function commitRoundAction(action, options = {}) {
     try {
-      const response = await fetch("/api/round-result", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          decisionType,
-          acceptedJudgeId,
-          offersAvailable: OFFER_JUDGE_IDS.length
-        })
-      });
+      const nextState = applyAction(roundStateRef.current, action);
+      setRoundStateValue(nextState);
+      return nextState;
+    } catch (error) {
+      if (options.swallowInvalid && error?.name === "InvalidActionError") {
+        return roundStateRef.current;
+      }
 
-      const payload = response.ok ? await response.json() : null;
-
-      setRoundResult(
-        payload || {
-          score: 40,
-          scoreTier: "bad",
-          decisionType,
-          catchphrase: "No judge accepted this round. Regroup and sharpen the next pitch."
-        }
-      );
-      setPhase("result-animation");
-    } catch {
-      setRoundResult({
-        score: 40,
-        scoreTier: "bad",
-        decisionType,
-        catchphrase: "No judge accepted this round. Regroup and sharpen the next pitch."
-      });
-      setPhase("result-animation");
-    } finally {
-      setIsResolvingResult(false);
+      throw error;
     }
+  }
+
+  function initializeJudgingFlow() {
+    if (!DIALOGUE_GROUPS.length) {
+      setJudgingFinished(true);
+      setChatEnabled(true);
+      return;
+    }
+
+    setGroupIndex(0);
+    setLineIndex(0);
+    setChatEnabled(false);
+    setJudgingFinished(false);
+    setJudgeReactions({});
+    setOfferLineIndex(0);
+    setOfferDecisions({});
+    setAcceptedOfferJudgeId(null);
+    setRoundResult(null);
+    resetLiveReactionState();
   }
 
   function moveToFeedbackScreen() {
@@ -293,15 +288,29 @@ export default function Page() {
       query.set("acceptedJudgeId", acceptedOfferJudgeId);
     }
 
-    router.push(`/feedback?${query.toString()}`);
+    startTransition(() => {
+      router.push(`/feedback?${query.toString()}`);
+    });
   }
 
   function handleStart() {
+    stopCapture("restart");
     hasNavigatedFeedbackRef.current = false;
-    hasPlayedResultAudioRef.current = false;
-    setTimeLeft(PITCH_SECONDS);
-    setCountdown(3);
-    setPhase("countdown");
+
+    const initialState = createRoundState();
+    const startedAtMs = Date.now();
+    const startedState = applyAction(initialState, {
+      type: PLAYER_ACTIONS.START_PITCH,
+      payload: {
+        durationSeconds: PITCH_SECONDS,
+        startedAtMs,
+        sourceType: PITCH_SOURCE_TYPES.MOCK
+      }
+    });
+
+    setRoundStateValue(startedState);
+    setNowMs(startedAtMs);
+    setPhase("pitch");
     setGroupIndex(0);
     setLineIndex(0);
     setChatEnabled(false);
@@ -313,26 +322,40 @@ export default function Page() {
     setOfferDecisions({});
     setAcceptedOfferJudgeId(null);
     setRoundResult(null);
-    setIsResolvingResult(false);
+    resetLiveReactionState();
+
+    const adapter = createPitchCaptureAdapter({
+      source: createMockPitchTranscriptSource(),
+      onTranscriptUpdate: (update) => {
+        commitRoundAction(
+          {
+            type: PLAYER_ACTIONS.SUBMIT_PITCH_TRANSCRIPT,
+            payload: update
+          },
+          { swallowInvalid: true }
+        );
+      }
+    });
+
+    captureAdapterRef.current = adapter;
+    adapter.start({
+      startedAtMs
+    });
   }
 
-  function initializeJudgingFlow() {
-    if (!DIALOGUE_GROUPS.length) {
-      setJudgingFinished(true);
-      setChatEnabled(true);
-      return;
-    }
+  function handleManualClosePitch() {
+    stopCapture("manual-close");
+    const nextState = commitRoundAction({
+      type: PLAYER_ACTIONS.CLOSE_PITCH,
+      payload: {
+        nowMs: Date.now(),
+        reason: PITCH_CLOSE_REASONS.MANUAL
+      }
+    });
 
-    setGroupIndex(0);
-    setLineIndex(0);
-    setChatEnabled(false);
-    setJudgingFinished(false);
-    setJudgeReactions({});
-    setOfferLineIndex(0);
-    setOfferDecisions({});
-    setAcceptedOfferJudgeId(null);
-    setRoundResult(null);
-    setIsResolvingResult(false);
+    if (nextState.currentState === ROUND_STATES.PITCH_CLOSED) {
+      setPhase("pitch-closed");
+    }
   }
 
   function handleAdvanceDialogue() {
@@ -360,8 +383,14 @@ export default function Page() {
         return;
       }
 
-      if (!OFFER_JUDGE_IDS.length) {
-        void resolveRoundResult("disaccept");
+      const decisionState = commitRoundAction({
+        type: PLAYER_ACTIONS.ADVANCE
+      });
+
+      if (!decisionState.offers.length) {
+        commitRoundAction({
+          type: PLAYER_ACTIONS.ADVANCE
+        });
         return;
       }
 
@@ -369,8 +398,8 @@ export default function Page() {
     }
   }
 
-  async function handleAcceptOffer(judgeId) {
-    const offer = OFFER_BY_JUDGE[judgeId];
+  function handleAcceptOffer(judgeId) {
+    const offer = offersByJudge[judgeId];
     if (!offer) {
       return;
     }
@@ -378,24 +407,29 @@ export default function Page() {
     setAcceptedOfferJudgeId(judgeId);
     setOfferDecisions(() => {
       const next = {};
-      OFFER_JUDGE_IDS.forEach((id) => {
+      offerJudgeIds.forEach((id) => {
         next[id] = id === judgeId ? "accepted" : "rejected";
       });
       return next;
     });
 
-    await resolveRoundResult("accept", judgeId);
+    commitRoundAction({
+      type: PLAYER_ACTIONS.ACCEPT_DEAL,
+      payload: { dealId: offer.id }
+    });
   }
 
-  async function handleRejectAllOffers() {
+  function handleRejectAllOffers() {
     const next = {};
-    OFFER_JUDGE_IDS.forEach((judgeId) => {
+    offerJudgeIds.forEach((judgeId) => {
       next[judgeId] = "rejected";
     });
 
     setOfferDecisions(next);
     setAcceptedOfferJudgeId(null);
-    await resolveRoundResult("disaccept");
+    commitRoundAction({
+      type: PLAYER_ACTIONS.REJECT_DEAL
+    });
   }
 
   async function handleSendMessage() {
@@ -444,139 +478,163 @@ export default function Page() {
     setJudgingFinished(true);
     setChatEnabled(false);
 
+    commitRoundAction({
+      type: PLAYER_ACTIONS.ADVANCE
+    });
+    const dealsState = commitRoundAction({
+      type: PLAYER_ACTIONS.SUBMIT_ANSWER,
+      payload: {
+        answer: trimmedMessage
+      }
+    });
+
     if (OFFER_CONVERSATION.length) {
-      setPhase("offer-dialogue");
       setOfferLineIndex(0);
+      setPhase("offer-dialogue");
       return;
     }
 
-    setPhase("offer-select");
+    const decisionState = commitRoundAction({
+      type: PLAYER_ACTIONS.ADVANCE
+    });
+
+    if (!decisionState.offers.length) {
+      commitRoundAction({
+        type: PLAYER_ACTIONS.ADVANCE
+      });
+      return;
+    }
+
+    if (dealsState.currentState === ROUND_STATES.DEALS) {
+      setPhase("offer-select");
+    }
   }
 
   useEffect(() => {
-    countdownAudioRef.current = new Audio(AUDIO_PATHS.countdown);
-    debateMusicRef.current = new Audio(AUDIO_PATHS.debate);
-    debateMusicRef.current.loop = true;
-    debateMusicRef.current.volume = 0.45;
-    lobbyMusicRef.current = new Audio(AUDIO_PATHS.lobby);
-    lobbyMusicRef.current.loop = true;
-    lobbyMusicRef.current.volume = 0.4;
-    nothingMusicRef.current = new Audio(AUDIO_PATHS.nothing);
-    nothingMusicRef.current.loop = true;
-    nothingMusicRef.current.volume = 0.35;
-    losingAudioRef.current = new Audio(AUDIO_PATHS.losing);
-    winningAudioRef.current = new Audio(AUDIO_PATHS.winning);
+    if (roundState.currentState !== ROUND_STATES.PITCH) {
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      setNowMs(Date.now());
+    }, 250);
+
+    return () => clearInterval(intervalId);
+  }, [roundState.currentState]);
+
+  useEffect(() => {
+    if (phase !== "pitch" || roundState.currentState !== ROUND_STATES.PITCH) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function pollLiveReactions() {
+      if (liveReactionRequestRef.current) {
+        return;
+      }
+
+      const transcriptUpdates = roundStateRef.current.pitchCapture.transcriptUpdates;
+      if (!transcriptUpdates.length) {
+        return;
+      }
+
+      liveReactionRequestRef.current = true;
+
+      try {
+        const response = await fetch("/api/live-judge-reactions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            roundId: "local-round",
+            generatedAtMs: Date.now(),
+            presentationOnly: true,
+            preferredSource: "provider",
+            judges: STAGE_JUDGES,
+            transcriptUpdates,
+            lastReactionAtMs: liveReactionMetaRef.current.lastReactionAtMs,
+            lastTranscriptSequence: liveReactionMetaRef.current.lastTranscriptSequence
+          })
+        });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const payload = await response.json();
+
+        if (!cancelled && payload?.emitted && payload?.event) {
+          setLiveReactionEvent(payload.event);
+          liveReactionMetaRef.current = {
+            lastReactionAtMs: payload.event.generatedAtMs,
+            lastTranscriptSequence: payload.event.transcriptSequence
+          };
+        }
+      } catch {
+        // Live pitch reactions stay cosmetic, so the stage keeps the last cue on fetch failure.
+      } finally {
+        liveReactionRequestRef.current = false;
+      }
+    }
+
+    pollLiveReactions();
+    const intervalId = setInterval(pollLiveReactions, LIVE_REACTION_POLL_MS);
 
     return () => {
-      stopBackgroundMusic();
-
-      if (countdownAudioRef.current) {
-        countdownAudioRef.current.pause();
-        countdownAudioRef.current = null;
-      }
-
-      debateMusicRef.current = null;
-      lobbyMusicRef.current = null;
-      nothingMusicRef.current = null;
-
-      if (losingAudioRef.current) {
-        losingAudioRef.current.pause();
-        losingAudioRef.current = null;
-      }
-
-      if (winningAudioRef.current) {
-        winningAudioRef.current.pause();
-        winningAudioRef.current = null;
-      }
+      cancelled = true;
+      liveReactionRequestRef.current = false;
+      clearInterval(intervalId);
     };
-  }, []);
+  }, [phase, roundState.currentState]);
 
   useEffect(() => {
-    const isJudgeTalking =
-      (phase === "judging" && !chatEnabled && Boolean(activeLine)) ||
-      (phase === "offer-dialogue" && Boolean(activeOfferLine));
-
-    const isPlayerPitchingOrWriting = phase === "pitch" || (phase === "judging" && chatEnabled);
-
-    const shouldSilenceBackgroundMusic =
-      phase === "countdown" ||
-      phase === "result-animation" ||
-      phase === "result";
-
-    if (shouldSilenceBackgroundMusic) {
-      stopBackgroundMusic();
+    if (roundState.currentState !== ROUND_STATES.PITCH || !pitchTimer?.isExpired) {
       return;
     }
 
-    if (isJudgeTalking) {
-      playBackgroundMusic("debate");
-      return;
-    }
+    stopCapture("timer-expired");
+    const nextState = commitRoundAction({
+      type: PLAYER_ACTIONS.CLOSE_PITCH,
+      payload: {
+        nowMs: pitchTimer.closesAtMs,
+        reason: PITCH_CLOSE_REASONS.TIMER_EXPIRED
+      }
+    });
 
-    if (isPlayerPitchingOrWriting) {
-      playBackgroundMusic("lobby");
-      return;
+    if (nextState.currentState === ROUND_STATES.PITCH_CLOSED) {
+      setPhase("pitch-closed");
     }
-
-    playBackgroundMusic("nothing");
-  }, [phase, chatEnabled, activeLine, activeOfferLine]);
+  }, [pitchTimer?.closesAtMs, pitchTimer?.isExpired, roundState.currentState]);
 
   useEffect(() => {
-    if (phase !== "countdown" || countdown <= 0) {
-      return;
-    }
-
-    playAudioEffect(countdownAudioRef);
-  }, [phase, countdown]);
-
-  useEffect(() => {
-    if (phase !== "result" || !roundResult || hasPlayedResultAudioRef.current) {
-      return;
-    }
-
-    if (WINNING_SCORE_TIERS.has(roundResult.scoreTier)) {
-      playAudioEffect(winningAudioRef);
-    } else {
-      playAudioEffect(losingAudioRef);
-    }
-
-    hasPlayedResultAudioRef.current = true;
-  }, [phase, roundResult]);
-
-  useEffect(() => {
-    if (phase !== "countdown") {
-      return;
-    }
-
-    if (countdown < 0) {
-      setPhase("pitch");
+    if (roundState.currentState !== ROUND_STATES.PITCH_CLOSED || phase !== "pitch-closed") {
       return;
     }
 
     const timeoutId = setTimeout(() => {
-      setCountdown((current) => current - 1);
-    }, 1000);
-
-    return () => clearTimeout(timeoutId);
-  }, [phase, countdown]);
-
-  useEffect(() => {
-    if (phase !== "pitch") {
-      return;
-    }
-
-    if (timeLeft === 0) {
-      setPhase("judging");
       initializeJudgingFlow();
+      commitRoundAction({
+        type: PLAYER_ACTIONS.ADVANCE,
+        payload: createJudgeBundle(roundState.evaluation)
+      });
+      setPhase("judging");
+    }, 900);
+
+    return () => clearTimeout(timeoutId);
+  }, [phase, roundState.currentState, roundState.evaluation]);
+
+  useEffect(() => {
+    if (roundState.currentState !== ROUND_STATES.ROUND_RESULT) {
       return;
     }
 
-    const timeoutId = setTimeout(() => {
-      setTimeLeft((current) => Math.max(0, current - 1));
-    }, 1000);
-
-    return () => clearTimeout(timeoutId);
-  }, [phase, timeLeft]);
+    setRoundResult(buildRoundResultSummary(roundState, acceptedOfferJudgeId));
+    if (phase !== "result-animation" && phase !== "result") {
+      setPhase("result-animation");
+    }
+  }, [acceptedOfferJudgeId, phase, roundState]);
 
   useEffect(() => {
     if (phase !== "result-animation" || !roundResult) {
@@ -602,13 +660,21 @@ export default function Page() {
     return () => clearTimeout(timeoutId);
   }, [phase, roundResult]);
 
+  useEffect(() => {
+    return () => {
+      stopCapture("unmount");
+    };
+  }, []);
+
   return (
     <main className="relative h-screen overflow-hidden bg-black text-white">
-      <ScoreBadge score={70} />
+      <ScoreBadge score={displayScore} />
       <StageScene
         activeSpeakerId={spotlightSpeakerId}
         judgeReactions={judgeReactions}
-        offersByJudge={OFFER_BY_JUDGE}
+        liveJudgePresence={liveJudgePresence}
+        livePresenceEnabled={phase === "pitch"}
+        offersByJudge={offersByJudge}
         offerDecisions={offerDecisions}
         offerSelectionEnabled={phase === "offer-select"}
         onAcceptOffer={handleAcceptOffer}
@@ -624,10 +690,40 @@ export default function Page() {
         statusText={statusText}
       />
 
-      {phase === "pitch" && (
-        <div className="font-display absolute right-4 top-4 z-30 rounded-xl border border-white/30 bg-black/55 px-4 py-2 text-xl tracking-wide md:right-6 md:top-6 md:text-3xl">
-          Pitch {formatTime(timeLeft)}
-        </div>
+      {phase === "pitch" && pitchTimer && (
+        <>
+          <div className="font-display absolute right-4 top-4 z-30 rounded-xl border border-white/30 bg-black/55 px-4 py-2 text-xl tracking-wide md:right-6 md:top-6 md:text-3xl">
+            Pitch {formatTime(pitchTimer.remainingSeconds)}
+          </div>
+
+          <section className="absolute inset-x-0 bottom-3 z-30 px-3 md:bottom-6 md:px-6">
+            <div className="mx-auto w-full max-w-4xl rounded-3xl border border-white/25 bg-black/82 px-4 py-4 shadow-dialogue backdrop-blur md:px-6 md:py-5">
+              <p className="font-display text-xl text-white md:text-2xl">Timed Pitch Capture</p>
+              <p className="mt-2 text-sm text-white/90 md:text-base">
+                {pitchTranscriptText || "Listening for transcript updates from the mock capture source..."}
+              </p>
+              <p className="mt-2 text-xs text-white/75 md:text-sm">
+                Live judge presence runs through a separate presentation-only adapter and never changes deterministic scores or round flow.
+              </p>
+              <p className="mt-2 text-xs text-white/70 md:text-sm">
+                Structured updates are captured into the deterministic round state and will be finalized when the pitch closes.
+              </p>
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <button
+                  suppressHydrationWarning
+                  type="button"
+                  onClick={handleManualClosePitch}
+                  className="rounded-xl border border-white/45 bg-white/10 px-5 py-2 text-sm font-semibold text-white transition hover:bg-white/20 md:text-base"
+                >
+                  Close Pitch Early
+                </button>
+                <span className="text-xs uppercase tracking-wide text-white/65 md:text-sm">
+                  Source {roundState.pitchCapture.sourceType}
+                </span>
+              </div>
+            </div>
+          </section>
+        </>
       )}
 
       {phase === "intro" && (
@@ -638,7 +734,7 @@ export default function Page() {
               You will have {formatTime(PITCH_SECONDS)} to present your product idea to the judges.
             </p>
             <p className="mb-6 text-sm text-white/75 md:text-base">
-              When you press Start, a 3-2-1 countdown begins, then your pitch timer starts.
+              Starting the round opens a real pitch-capture phase. The timer, transcript finalization, and pitch close all come from structured round state.
             </p>
             <button
               suppressHydrationWarning
@@ -646,17 +742,23 @@ export default function Page() {
               onClick={handleStart}
               className="rounded-xl border border-white/45 bg-white/10 px-6 py-3 text-base font-semibold text-white transition hover:bg-white/20 md:text-lg"
             >
-              Start
+              Start Pitch
             </button>
           </div>
         </section>
       )}
 
-      {phase === "countdown" && (
-        <section className="absolute inset-0 z-40 flex items-center justify-center bg-black/55">
-          <p className="font-display text-[6rem] leading-none text-white drop-shadow-[0_8px_22px_rgba(0,0,0,0.6)] md:text-[10rem]">
-            {countdown === 0 ? "START" : countdown}
-          </p>
+      {phase === "pitch-closed" && (
+        <section className="absolute inset-0 z-40 flex items-center justify-center bg-black/58 p-4">
+          <div className="w-full max-w-2xl rounded-3xl border border-white/20 bg-black/78 p-6 backdrop-blur md:p-8">
+            <p className="font-display text-2xl text-white md:text-4xl">Pitch Captured</p>
+            <p className="mt-3 text-sm text-white/90 md:text-base">
+              {roundState.pitchCapture.finalizedPitch?.text}
+            </p>
+            <p className="mt-4 text-xs uppercase tracking-wide text-white/65 md:text-sm">
+              Closing reason: {roundState.pitchCapture.closeReason}
+            </p>
+          </div>
         </section>
       )}
 
@@ -683,7 +785,7 @@ export default function Page() {
             <p className="mt-3 text-base uppercase tracking-wide text-white/80 md:text-lg">{roundResult.scoreTier} result</p>
             <p className="mt-4 text-sm text-white/95 md:text-base">{roundResult.catchphrase}</p>
             <p className="mt-4 text-xs text-white/70 md:text-sm">
-              Decision: {roundResult.decisionType === "accept" ? "Accepted an offer" : "Disaccepted offers"}
+              Decision: {roundResult.decisionType === "accept" ? "Accepted an offer" : "Rejected available offers"}
             </p>
             <button
               suppressHydrationWarning
@@ -697,7 +799,6 @@ export default function Page() {
           </div>
         </section>
       )}
-
     </main>
   );
 }
