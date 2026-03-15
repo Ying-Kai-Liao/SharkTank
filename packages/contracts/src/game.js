@@ -16,7 +16,24 @@ export const PLAYER_ACTIONS = Object.freeze({
   SUBMIT_ANSWER: "submit_answer",
   ACCEPT_DEAL: "accept_deal",
   REJECT_DEAL: "reject_deal",
-  ADVANCE: "advance_when_timer_expires"
+  ADVANCE: "advance_when_timer_expires",
+  SUBMIT_BARGAIN: "submit_bargain",
+  DECLINE_QUESTION: "decline_question"
+});
+
+export const NEGOTIATION_ACTION_TYPES = Object.freeze([
+  "answer",
+  "bargain",
+  "accept",
+  "refuse",
+  "decline"
+]);
+
+export const BARGAIN_LIMITS = Object.freeze({
+  minEquityDelta: -5,
+  maxEquityDelta: 5,
+  minAmountChangePct: -0.20,
+  maxAmountChangePct: 0.20
 });
 
 export const PITCH_CLOSE_REASONS = Object.freeze({
@@ -200,5 +217,40 @@ export function validateFinalizedPitch(value) {
     throw new Error(
       "Finalized pitch output must include non-empty text, transcript updates, timing bounds, and a supported close reason."
     );
+  }
+}
+
+export function isNegotiationActionShape(value) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      NEGOTIATION_ACTION_TYPES.includes(value.type) &&
+      (value.offerId === undefined || hasText(value.offerId)) &&
+      (value.terms === undefined || (typeof value.terms === "object" && value.terms !== null)) &&
+      (value.answer === undefined || typeof value.answer === "string")
+  );
+}
+
+export function validateNegotiationAction(value) {
+  if (!isNegotiationActionShape(value)) {
+    throw new Error("Negotiation action must have a valid type, and optional offerId (string), terms (object), or answer (string).");
+  }
+}
+
+export function isBargainPayloadShape(value) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      hasText(value.offerId) &&
+      value.terms &&
+      typeof value.terms === "object" &&
+      isFiniteNumber(value.terms.amount) &&
+      isFiniteNumber(value.terms.equity)
+  );
+}
+
+export function validateBargainPayload(value) {
+  if (!isBargainPayloadShape(value)) {
+    throw new Error("Bargain payload must include an offerId (string) and terms with finite amount and equity.");
   }
 }
