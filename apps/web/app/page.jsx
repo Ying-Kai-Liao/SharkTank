@@ -102,6 +102,20 @@ function averageEvaluationScore(evaluation) {
   return Math.round(values.reduce((total, value) => total + value, 0) / values.length);
 }
 
+function findNextDistinctOfferLine(currentIndex, conversation) {
+  const currentLine = conversation[currentIndex];
+  if (!currentLine) {
+    return currentIndex;
+  }
+
+  let nextIndex = currentIndex + 1;
+  while (nextIndex < conversation.length && conversation[nextIndex]?.text === currentLine.text) {
+    nextIndex += 1;
+  }
+
+  return nextIndex;
+}
+
 export default function Page() {
   const router = useRouter();
   const hasNavigatedFeedbackRef = useRef(false);
@@ -628,8 +642,10 @@ export default function Page() {
         return;
       }
 
-      if (offerLineIndex < OFFER_CONVERSATION.length - 1) {
-        setOfferLineIndex((current) => current + 1);
+      const nextOfferIndex = findNextDistinctOfferLine(offerLineIndex, OFFER_CONVERSATION);
+
+      if (nextOfferIndex < OFFER_CONVERSATION.length) {
+        setOfferLineIndex(nextOfferIndex);
         return;
       }
 
