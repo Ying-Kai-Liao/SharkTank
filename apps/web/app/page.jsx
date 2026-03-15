@@ -102,14 +102,15 @@ function averageEvaluationScore(evaluation) {
   return Math.round(values.reduce((total, value) => total + value, 0) / values.length);
 }
 
-function findNextDistinctOfferLine(currentIndex, conversation) {
+function findNextUniqueOfferLine(currentIndex, conversation) {
   const currentLine = conversation[currentIndex];
   if (!currentLine) {
     return currentIndex;
   }
 
+  const seenTexts = new Set(conversation.slice(0, currentIndex + 1).map((line) => line?.text));
   let nextIndex = currentIndex + 1;
-  while (nextIndex < conversation.length && conversation[nextIndex]?.text === currentLine.text) {
+  while (nextIndex < conversation.length && seenTexts.has(conversation[nextIndex]?.text)) {
     nextIndex += 1;
   }
 
@@ -642,7 +643,7 @@ export default function Page() {
         return;
       }
 
-      const nextOfferIndex = findNextDistinctOfferLine(offerLineIndex, OFFER_CONVERSATION);
+      const nextOfferIndex = findNextUniqueOfferLine(offerLineIndex, OFFER_CONVERSATION);
 
       if (nextOfferIndex < OFFER_CONVERSATION.length) {
         setOfferLineIndex(nextOfferIndex);
