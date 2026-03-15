@@ -41,6 +41,9 @@ const JUDGE_TO_STAGE = {
 };
 const OFFER_CONVERSATION = offerConversation.conversation || [];
 const RESULT_ANIMATION_MS = 1800;
+const COUNTDOWN_START = 3;
+const COUNTDOWN_TICK_MS = 800;
+const COUNTDOWN_START_HOLD_MS = 520;
 
 function createRoundState() {
   return createInitialGameState({
@@ -108,6 +111,8 @@ export default function Page() {
   const ambienceOscRef = useRef(null);
   const ambienceGainRef = useRef(null);
   const currentAmbienceModeRef = useRef(null);
+  const countdownAudioRef = useRef(null);
+  const battleMusicRef = useRef(null);
   const hasPlayedResultChimeRef = useRef(false);
   const roundStateRef = useRef(createRoundState());
   const captureAdapterRef = useRef(null);
@@ -131,6 +136,13 @@ export default function Page() {
   const [liveReactionEvent, setLiveReactionEvent] = useState(null);
   const [pitchSourceType, setPitchSourceType] = useState(PITCH_SOURCE_TYPES.MOCK);
   const [mediaRecorderAvailable, setMediaRecorderAvailable] = useState(false);
+  const [debriefData, setDebriefData] = useState(null);
+  const [debriefLoading, setDebriefLoading] = useState(false);
+  const debriefFetchedRef = useRef(false);
+  const [countdownValue, setCountdownValue] = useState(null);
+  const [pendingPitchSourceType, setPendingPitchSourceType] = useState(null);
+  const [liveMicError, setLiveMicError] = useState("");
+  const [judgeMicListening, setJudgeMicListening] = useState(false);
 
   const activeOfferLine = OFFER_CONVERSATION[offerLineIndex] || null;
   const pitchTimer = getPitchTimerSnapshot(roundState, nowMs);
@@ -161,6 +173,7 @@ export default function Page() {
   const rejectedOfferCount = offerJudgeIds.filter((judgeId) => offerDecisions[judgeId] === "rejected").length;
   const allOffersRejected = offerJudgeIds.length > 0 && rejectedOfferCount === offerJudgeIds.length;
   const displayScore = averageEvaluationScore(roundState.evaluation);
+  const roundResult = roundState.evaluation || null;
 
   const speakerName =
     phase === "offer-dialogue" && activeOfferSpeakerId ? JUDGE_NAMES[activeOfferSpeakerId] || "Judge"
@@ -241,9 +254,9 @@ export default function Page() {
     }
 
     if (!lobbyTypingAudioRef.current) {
-      const audio = new Audio("/assets/music/Lobby.mp3");
+      const audio = new Audio("/assets/music/bubble.mp3");
       audio.loop = true;
-      audio.volume = 0.3;
+      audio.volume = 0.4;
       lobbyTypingAudioRef.current = audio;
     }
 
@@ -265,6 +278,64 @@ export default function Page() {
 
     audio.pause();
     audio.currentTime = 0;
+  }
+
+  function ensureCountdownAudio() {
+    if (typeof window === "undefined") {
+      return null;
+    }
+
+    if (!countdownAudioRef.current) {
+      const audio = new Audio("/assets/music/CountDown.mp3");
+      audio.volume = 0.65;
+      countdownAudioRef.current = audio;
+    }
+
+    return countdownAudioRef.current;
+  }
+
+  function setCountdownAudioPlaying(shouldPlay) {
+    const audio = ensureCountdownAudio();
+    if (!audio) {
+      return;
+    }
+
+    if (shouldPlay) {
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+    } else {
+      audio.pause();
+      audio.currentTime = 0;
+    }
+  }
+
+  function ensureBattleMusic() {
+    if (typeof window === "undefined") {
+      return null;
+    }
+
+    if (!battleMusicRef.current) {
+      const audio = new Audio("/assets/music/Battle.mp3");
+      audio.loop = true;
+      audio.volume = 0.35;
+      battleMusicRef.current = audio;
+    }
+
+    return battleMusicRef.current;
+  }
+
+  function setBattleMusicPlaying(shouldPlay) {
+    const audio = ensureBattleMusic();
+    if (!audio) {
+      return;
+    }
+
+    if (shouldPlay) {
+      audio.play().catch(() => {});
+    } else {
+      audio.pause();
+      audio.currentTime = 0;
+    }
   }
 
   async function primeLiveMicrophoneAccess() {
@@ -989,10 +1060,21 @@ export default function Page() {
   }, [phase, roundResult]);
 
   useEffect(() => {
+    setCountdownAudioPlaying(phase === "countdown");
+  }, [phase]);
+
+  useEffect(() => {
+    const judgeSpeaking = phase === "judging" && panelAwaitingAnswer && Boolean(panelSpeakerStageId);
+    setBattleMusicPlaying(judgeSpeaking);
+  }, [phase, panelAwaitingAnswer, panelSpeakerStageId]);
+
+  useEffect(() => {
     return () => {
       stopCapture("unmount");
       stopAmbience();
       setLobbyTypingAudioPlaying(false);
+      setCountdownAudioPlaying(false);
+      setBattleMusicPlaying(false);
       stopJudgeMicCapture();
       if (audioContextRef.current && audioContextRef.current.state !== "closed") {
         audioContextRef.current.close().catch(() => {
