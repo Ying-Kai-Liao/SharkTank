@@ -2,6 +2,8 @@
 
 SharkTank is a web-based Shark Tank style game built as a monorepo with a clear split between UI, deterministic game state, and AI-generated dialogue.
 
+[Demo Link](https://youtu.be/jDE5hzHKFzc)
+
 ## Current Direction
 
 The near-term goal is to build a practical MVP first and leave richer "fun" layers for later.
